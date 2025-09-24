@@ -379,6 +379,8 @@
                     style="min-width:220px" />
                 <button id="scanBtn" class="btn">📷 Scan</button>
                 <button id="testCam" class="btn" title="Quick permission/connection check">Test camera</button>
+                <button id="hiResBtn" class="btn">Hi-Res</button>
+                <button id="snapBtn" class="btn">Snap & Scan</button>
                 <button id="torchBtn" class="btn" style="display:none">Torch</button>
                 <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" class="input"
                     style="display:none;width:140px" title="Zoom">
@@ -432,7 +434,7 @@
         async function loadZXingIfNeeded() {
             if (window.ZXingBrowser) return 'inline';
             const UMDs = [
-                ["local UMD", "./zxing-browser.min.js"],
+                ["local UMD", "./zxing-browser.min.js"], // local file first (put next to index.html)
                 ["jsDelivr UMD", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg UMD", "https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg auto", "https://unpkg.com/@zxing/browser@0.1.5"]
@@ -499,6 +501,7 @@
         const testCamBtn = E('testCam'), torchBtn = E('torchBtn'), zoomSlider = E('zoomSlider');
         const hudMsg = E('hudMsg'), hudStatus = E('hudStatus'), hudCode = E('hudCode'), crosshair = E('crosshair');
         const imgFilesEl = E('imgFiles');
+        const hiResBtn = E('hiResBtn'), snapBtn = E('snapBtn');
 
         function findHeader(name) { const low = name.toLowerCase(); return headers.find(h => h.toLowerCase() === low); }
         function needHeaders() { if (!findHeader('Quantity')) throw new Error('Missing required column: Quantity'); if (!findHeader('Barcode')) throw new Error('Missing required column: Barcode'); }
@@ -531,7 +534,7 @@
         }
         function stopHudTimer() { clearInterval(scanTicker); scanTicker = null; }
 
-        /* Small beep for success (Android/iOS will allow after user interaction) */
+        /* Small beep for success */
         let audioCtx = null;
         function beep(freq = 900, ms = 120) {
             try {
@@ -728,8 +731,8 @@
             toast('Saved CSV', 'ok'); setStatus('Saved CSV to downloads');
         });
 
-        /* ===== Scanner (ZXing from <video> + fallback + Torch/Zoom + HUD) ===== */
-        let reader = null, stream = null, camTrack = null;
+        /* ===== Scanner (ZXing from <video> + fallback + Torch/Zoom + HUD + Hi-Res + Snap & Scan) ===== */
+        let reader = null, stream = null, camTrack = null, hiRes = false;
 
         function normalizeComicBarcode(text) {
             const m = String(text).replace(/[^\d+ ]/g, '').match(/(\d{12,13})(?:[ +\-]?(\d{2,5}))?/);
@@ -742,7 +745,9 @@
             applyFilter();
             const matches = filtered.length;
             hudSuccess(combined || payload.trim(), matches);
-            if (E('stageOnScan').checked && matches) {
+            try { navigator.vibrate && navigator.vibrate(30); } catch { }
+            beep();
+            if (stageOnScanEl.checked && matches) {
                 const best = filtered.find(({ o, i }) => {
                     const b = digits(get(o, 'Barcode'));
                     return combined && (b === combined || b.startsWith(combined) || combined.startsWith(b));
@@ -803,11 +808,15 @@
             scanArea.style.display = 'block';
             hudReset(); startHudTimer();
 
-            // Preflight permission + decent frame size
+            // Preflight permission + frame size
             let preflight;
             try {
                 preflight = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+                    video: {
+                        facingMode: "environment",
+                        width: { ideal: hiRes ? 1920 : 1280 },
+                        height: { ideal: hiRes ? 1080 : 720 }
+                    },
                     audio: false
                 });
             } catch (e) {
@@ -831,7 +840,11 @@
                     if (back?.deviceId) {
                         preflight.getTracks().forEach(t => t.stop());
                         stream = await navigator.mediaDevices.getUserMedia({
-                            video: { deviceId: { exact: back.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
+                            video: {
+                                deviceId: { exact: back.deviceId },
+                                width: { ideal: hiRes ? 1920 : 1280 },
+                                height: { ideal: hiRes ? 1080 : 720 }
+                            },
                             audio: false
                         });
                         videoEl.srcObject = stream; await videoEl.play(); await setupCameraControls(stream);
@@ -852,12 +865,10 @@
                     if (result && result.text) {
                         lastFoundAt = Date.now();
                         const code = result.text.replace(/\s+/g, '');
-                        hudSuccess(code, filtered.length);
-                        try { navigator.vibrate && navigator.vibrate(30); } catch { }
-                        beep();
-                        setTimeout(() => stopScanner(), 100); // let the green flash show
+                        setSearchFromBarcode(code);
+                        setTimeout(() => stopScanner(), 150);
                     }
-                    // ignore err (NotFoundException) — it fires when no code in frame
+                    // ignore NotFoundException frames
                 });
 
             } else {
@@ -869,9 +880,7 @@
                         if (codes && codes[0]?.rawValue) {
                             lastFoundAt = Date.now();
                             const code = codes[0].rawValue.replace(/\s+/g, '');
-                            hudSuccess(code, filtered.length);
-                            try { navigator.vibrate && navigator.vibrate(30); } catch { }
-                            beep();
+                            setSearchFromBarcode(code);
                             await stopScanner(); return;
                         }
                     } catch (e) { }
@@ -899,6 +908,93 @@
             }
         });
 
+        /* ===== Hi-Res toggle ===== */
+        hiResBtn.addEventListener('click', async () => {
+            hiRes = !hiRes;
+            hiResBtn.textContent = hiRes ? 'Hi-Res: On' : 'Hi-Res';
+            if (reader || stream) { await stopScanner(); await startScanner(); }
+        });
+
+        /* ===== Snap & Scan ===== */
+        function cropToCrosshairCanvas() {
+            const v = videoEl; const box = crosshair.getBoundingClientRect(); const vid = v.getBoundingClientRect();
+            const vw = v.videoWidth || 1280, vh = v.videoHeight || 720;
+            if (!vw || !vh) return null;
+            const sx = Math.max(0, Math.round((box.left - vid.left) / vid.width * vw));
+            const sy = Math.max(0, Math.round((box.top - vid.top) / vid.height * vh));
+            const sw = Math.min(vw - sx, Math.round(box.width / vid.width * vw));
+            const sh = Math.min(vh - sy, Math.round(box.height / vid.height * vh));
+            const c = document.createElement('canvas');
+            c.width = sw; c.height = sh;
+            c.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+            return c;
+        }
+        async function decodeCanvas(c) {
+            if ('BarcodeDetector' in window) {
+                try {
+                    const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
+                    const res = await det.detect(c);
+                    if (res && res[0]?.rawValue) return res[0].rawValue;
+                } catch { }
+            }
+            try {
+                const ZX = window.ZXingBrowser;
+                if (ZX?.BrowserMultiFormatReader) {
+                    const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = ZX;
+                    const r = new BrowserMultiFormatReader(new Map([
+                        [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
+                        [DecodeHintType.TRY_HARDER, true],
+                        [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]]
+                    ]), 200);
+                    const out = await r.decodeFromCanvas(c);
+                    if (out?.text) return out.text;
+                }
+            } catch { }
+            return null;
+        }
+        snapBtn.addEventListener('click', async () => {
+            if (!stream) { toast('Tap 📷 Scan first', 'err'); return; }
+            hudStatus.textContent = 'Analyzing…'; hudMsg.className = 'hudMsg';
+            let canvas = null;
+
+            // Prefer a sharp grab via ImageCapture if available
+            try {
+                const track = (stream.getVideoTracks && stream.getVideoTracks()[0]) || null;
+                if ('ImageCapture' in window && track) {
+                    const cap = new ImageCapture(track);
+                    const blob = await cap.takePhoto({ imageWidth: hiRes ? 2592 : 1920 });
+                    const img = await createImageBitmap(blob);
+                    const full = document.createElement('canvas');
+                    full.width = img.width; full.height = img.height;
+                    full.getContext('2d').drawImage(img, 0, 0);
+
+                    // Crop proportions from live crosshair
+                    const v = videoEl;
+                    const box = crosshair.getBoundingClientRect();
+                    const vid = v.getBoundingClientRect();
+                    const sx = Math.max(0, Math.round((box.left - vid.left) / vid.width * img.width));
+                    const sy = Math.max(0, Math.round((box.top - vid.top) / vid.height * img.height));
+                    const sw = Math.min(img.width - sx, Math.round(box.width / vid.width * img.width));
+                    const sh = Math.min(img.height - sy, Math.round(box.height / vid.height * img.height));
+
+                    canvas = document.createElement('canvas'); canvas.width = sw; canvas.height = sh;
+                    canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+                }
+            } catch { /* ignore & fall back */ }
+
+            if (!canvas) canvas = cropToCrosshairCanvas();
+            if (!canvas) { toast('No frame yet — try again', 'err'); return; }
+
+            const code = await decodeCanvas(canvas);
+            if (code) {
+                setSearchFromBarcode(code.replace(/\s+/g, ''));
+                setTimeout(() => stopScanner(), 200);
+            } else {
+                hudHint();
+                toast('No code in snapshot — move closer, try torch/zoom', 'err');
+            }
+        });
+
         /* Add photo (per-card) */
         let currentPhotoKey = null;
         const hiddenPhotoInput = document.createElement('input');
@@ -914,11 +1010,6 @@
 
         /* ===== Results & rendering helpers ===== */
         function updateCounts() { countsEl.textContent = `Staged: ${stagedOrder.length} • Results: ${filtered.length}`; }
-        function urlForKey(key, o) {
-            if (imgMap.has(key)) return imgMap.get(key);
-            if (imageHeader) { const v = o[imageHeader]; if (v && /^https?:\/\//i.test(v)) return v; if (v && v.startsWith('data:image/')) return v; }
-            return null;
-        }
 
         /* Init badge */
         setScannerSourceBadge();
