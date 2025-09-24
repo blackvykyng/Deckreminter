@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inventory Stager — Calm Cards + Scan HUD</title>
+    <title>Inventory Stager — Auto Scan+</title>
     <style>
         :root {
             --bg: #0b1020;
@@ -17,10 +17,6 @@
             --thumb: 96px;
         }
 
-        .bigthumb:root {
-            --thumb: 160px;
-        }
-
         .light:root {
             --bg: #f8fafc;
             --panel: #ffffff;
@@ -29,6 +25,10 @@
             --card: #ffffff;
             --border: #e2e8f0;
             --shadow: 0 10px 20px rgba(2, 6, 23, .06)
+        }
+
+        .bigthumb:root {
+            --thumb: 160px
         }
 
         html,
@@ -289,7 +289,7 @@
             color: var(--muted)
         }
 
-        /* === Scan HUD === */
+        /* Scan HUD */
         .scanWrap {
             display: none;
             margin-top: 10px
@@ -379,8 +379,6 @@
                     style="min-width:220px" />
                 <button id="scanBtn" class="btn">📷 Scan</button>
                 <button id="testCam" class="btn" title="Quick permission/connection check">Test camera</button>
-                <button id="hiResBtn" class="btn">Hi-Res</button>
-                <button id="snapBtn" class="btn">Snap & Scan</button>
                 <button id="torchBtn" class="btn" style="display:none">Torch</button>
                 <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" class="input"
                     style="display:none;width:140px" title="Zoom">
@@ -429,12 +427,12 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <script>
-        /* ===== ZXing loader with fallbacks + badge ===== */
+        /* ===== ZXing loader (local first) + badge ===== */
         let ZX_SRC = '(none)';
         async function loadZXingIfNeeded() {
             if (window.ZXingBrowser) return 'inline';
             const UMDs = [
-                ["local UMD", "./zxing-browser.min.js"], // local file first (put next to index.html)
+                ["local UMD", "./zxing-browser.min.js"],
                 ["jsDelivr UMD", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg UMD", "https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg auto", "https://unpkg.com/@zxing/browser@0.1.5"]
@@ -444,13 +442,6 @@
                     await new Promise((ok, err) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = ok; s.onerror = err; document.head.appendChild(s); });
                     if (window.ZXingBrowser) { ZX_SRC = label; return label; }
                 } catch (e) { }
-            }
-            const ESMS = [
-                ["jsDelivr ESM", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm"],
-                ["esm.run ESM", "https://esm.run/@zxing/browser@0.1.5"]
-            ];
-            for (const [label, url] of ESMS) {
-                try { const mod = await import(url); if (mod?.BrowserMultiFormatReader) { window.ZXingBrowser = mod; ZX_SRC = label; return label; } } catch (e) { }
             }
             return null;
         }
@@ -465,8 +456,8 @@
         const statusEl = E('status'), toastEl = E('toast');
         function setStatus(msg) { statusEl.textContent = msg; }
         function toast(msg, kind = 'ok') {
-            toastEl.className = 'toast ' + (kind === 'err' ? 'err' : 'ok'); toastEl.textContent = msg;
-            toastEl.style.display = 'block'; clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.style.display = 'none', 1800);
+            toastEl.className = 'toast ' + (kind === 'err' ? 'err' : 'ok'); toastEl.textContent = msg; toastEl.style.display = 'block';
+            clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.style.display = 'none', 1800);
         }
         function digits(s) { return String(s || '').replace(/\D/g, ''); }
 
@@ -501,8 +492,8 @@
         const testCamBtn = E('testCam'), torchBtn = E('torchBtn'), zoomSlider = E('zoomSlider');
         const hudMsg = E('hudMsg'), hudStatus = E('hudStatus'), hudCode = E('hudCode'), crosshair = E('crosshair');
         const imgFilesEl = E('imgFiles');
-        const hiResBtn = E('hiResBtn'), snapBtn = E('snapBtn');
 
+        /* ===== Header helpers ===== */
         function findHeader(name) { const low = name.toLowerCase(); return headers.find(h => h.toLowerCase() === low); }
         function needHeaders() { if (!findHeader('Quantity')) throw new Error('Missing required column: Quantity'); if (!findHeader('Barcode')) throw new Error('Missing required column: Barcode'); }
         function detectImageHeader() { imageHeader = headers.find(h => /image|cover\s*image|cover\s*url|thumbnail/i.test(h)) || null; }
@@ -512,39 +503,6 @@
         function keyOf(o, idx) { const d = digits(get(o, 'Barcode')); return d ? `${d}#${idx}` : `row#${idx}`; }
         function updateIndex() { indexByKey.clear(); rows.forEach((o, i) => indexByKey.set(keyOf(o, i), i)); }
         function updateCounts() { countsEl.textContent = `Staged: ${stagedOrder.length} • Results: ${filtered.length}`; }
-
-        /* ===== Scan HUD feedback ===== */
-        let scanTicker = null, scanStart = 0, lastFoundAt = 0;
-        function hudReset() { hudMsg.className = 'hudMsg'; hudStatus.textContent = 'Scanning…'; hudCode.style.display = 'none'; crosshair.style.borderColor = 'color-mix(in oklab, var(--muted) 70%, transparent)'; }
-        function hudScanning() { hudMsg.className = 'hudMsg'; hudStatus.textContent = 'Scanning…'; hudCode.style.display = 'none'; crosshair.style.borderColor = 'color-mix(in oklab, var(--muted) 70%, transparent)'; }
-        function hudHint() { hudMsg.className = 'hudMsg err pulse'; hudStatus.textContent = 'No barcode yet — try torch/zoom or steady hand'; hudCode.style.display = 'none'; }
-        function hudSuccess(code, matches) {
-            hudMsg.className = 'hudMsg ok pulse';
-            hudStatus.textContent = matches != null ? `Found (${matches} match${matches === 1 ? '' : 'es'})` : 'Found';
-            hudCode.textContent = code; hudCode.style.display = '';
-            crosshair.style.borderColor = '#16a34a';
-        }
-        function startHudTimer() {
-            clearInterval(scanTicker); scanStart = Date.now(); lastFoundAt = 0; hudScanning();
-            scanTicker = setInterval(() => {
-                const s = ((Date.now() - scanStart) / 1000).toFixed(1);
-                if (!lastFoundAt) hudStatus.textContent = `Scanning… ${s}s`;
-                if (!lastFoundAt && Number(s) >= 4) hudHint();
-            }, 250);
-        }
-        function stopHudTimer() { clearInterval(scanTicker); scanTicker = null; }
-
-        /* Small beep for success */
-        let audioCtx = null;
-        function beep(freq = 900, ms = 120) {
-            try {
-                audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-                const o = audioCtx.createOscillator(), g = audioCtx.createGain();
-                o.type = 'sine'; o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
-                const t = audioCtx.currentTime; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.2, t + 0.01);
-                g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000); o.start(t); o.stop(t + ms / 1000 + 0.02);
-            } catch (e) { }
-        }
 
         /* ===== Images ===== */
         function urlForKey(key, o) {
@@ -576,7 +534,7 @@
         function releaseKey(key) { if (!stagedSet.has(key)) return; stagedSet.delete(key); const i = stagedOrder.indexOf(key); if (i >= 0) stagedOrder.splice(i, 1); renderCards(); updateCounts(); }
         E('clearStaged').addEventListener('click', () => { stagedSet.clear(); stagedOrder.length = 0; renderCards(); updateCounts(); });
 
-        /* ===== Search/Results ===== */
+        /* ===== Results ===== */
         function applyFilter() {
             const qRaw = searchEl.value.trim(); const q = qRaw.toLowerCase(); const qDigits = digits(qRaw);
             const out = [];
@@ -611,7 +569,7 @@
             });
         }
 
-        /* ===== Cards (staged only) ===== */
+        /* ===== Cards ===== */
         function renderCards() {
             cardsEl.innerHTML = '';
             document.documentElement.classList.toggle('light', E('lightMode').checked);
@@ -684,19 +642,14 @@
                 const sum = document.createElement('summary'); sum.textContent = 'Details'; det.appendChild(sum);
                 const kv = document.createElement('div'); kv.className = 'kv';
                 const hide = new Set(['Series', 'Issue Nr', 'Variant', 'Publisher', 'Release Year', 'Barcode', 'Quantity', imageHeader]);
-                headers.forEach(h => {
-                    if (hide.has(h)) return;
-                    const k = document.createElement('div'); k.textContent = h;
-                    const v = document.createElement('div'); v.textContent = String(o[h] ?? '');
-                    kv.appendChild(k); kv.appendChild(v);
-                });
+                headers.forEach(h => { if (hide.has(h)) return; const k = document.createElement('div'); k.textContent = h; const v = document.createElement('div'); v.textContent = String(o[h] ?? ''); kv.appendChild(k); kv.appendChild(v); });
                 det.appendChild(kv); card.appendChild(det);
 
                 cardsEl.appendChild(card);
             });
         }
 
-        /* ===== File + toggles ===== */
+        /* ===== File/toggles ===== */
         fileEl.addEventListener('change', async (e) => {
             const f = e.target.files[0]; if (!f) return;
             const text = await f.text();
@@ -731,10 +684,12 @@
             toast('Saved CSV', 'ok'); setStatus('Saved CSV to downloads');
         });
 
-        /* ===== Scanner (ZXing from <video> + fallback + Torch/Zoom + HUD + Hi-Res + Snap & Scan) ===== */
-        let reader = null, stream = null, camTrack = null, hiRes = false;
+        /* ===== Scanner (auto-fallbacks & add-on assist built-in) ===== */
+        let reader = null, stream = null, camTrack = null;
+        const hasBD = 'BarcodeDetector' in window;
 
         function normalizeComicBarcode(text) {
+            // extract 12/13 main + optional 2–5 add-on
             const m = String(text).replace(/[^\d+ ]/g, '').match(/(\d{12,13})(?:[ +\-]?(\d{2,5}))?/);
             return m ? { main: m[1], addon: m[2] || '' } : { main: text.trim(), addon: '' };
         }
@@ -746,272 +701,207 @@
             const matches = filtered.length;
             hudSuccess(combined || payload.trim(), matches);
             try { navigator.vibrate && navigator.vibrate(30); } catch { }
-            beep();
             if (stageOnScanEl.checked && matches) {
                 const best = filtered.find(({ o, i }) => {
                     const b = digits(get(o, 'Barcode'));
                     return combined && (b === combined || b.startsWith(combined) || combined.startsWith(b));
                 }) || filtered[0];
-                stageKey(keyOf(best.o, best.i));
-                toast('Staged from scan', 'ok');
+                stageKey(keyOf(best.o, best.i)); toast('Staged from scan', 'ok');
             }
         }
+        function hudReset() { hudMsg.className = 'hudMsg'; hudStatus.textContent = 'Scanning…'; hudCode.style.display = 'none'; crosshair.style.borderColor = 'color-mix(in oklab, var(--muted) 70%, transparent)'; }
+        function hudHint() { hudMsg.className = 'hudMsg err pulse'; hudStatus.textContent = 'No barcode yet — steady, torch/zoom help'; hudCode.style.display = 'none'; }
+        function hudSuccess(code, matches) { hudMsg.className = 'hudMsg ok pulse'; hudStatus.textContent = matches != null ? `Found (${matches} match${matches === 1 ? '' : 'es'})` : 'Found'; hudCode.textContent = code; hudCode.style.display = ''; crosshair.style.borderColor = '#16a34a'; }
+        let hudTimer = null, startedAt = 0;
+        function startHud() { clearInterval(hudTimer); startedAt = Date.now(); hudReset(); hudTimer = setInterval(() => { const s = ((Date.now() - startedAt) / 1000).toFixed(1); hudStatus.textContent = 'Scanning… ' + s + 's'; if (Number(s) >= 3) hudHint(); }, 250); }
+        function stopHud() { clearInterval(hudTimer); hudTimer = null; }
 
-        async function stopScanner() {
-            try { reader && reader.reset && reader.reset(); } catch { }
-            try { reader && reader.stopStreams && reader.stopStreams(); } catch { }
-            try { stream && stream.getTracks().forEach(t => t.stop()); } catch { }
-            reader = null; stream = null; camTrack = null;
-            scanArea.style.display = 'none';
-            torchBtn.style.display = 'none'; zoomSlider.style.display = 'none';
-            stopHudTimer(); hudReset();
+        function upscaleForDecode(srcCanvas, scale = 2) {
+            const w = Math.max(1, Math.round(srcCanvas.width * scale));
+            const h = Math.max(1, Math.round(srcCanvas.height * scale));
+            const c = document.createElement('canvas'); c.width = w; c.height = h;
+            const g = c.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(srcCanvas, 0, 0, w, h); return c;
         }
-
-        async function setupCameraControls(s) {
-            camTrack = (s && s.getVideoTracks && s.getVideoTracks()[0]) || null;
-            if (!camTrack) { torchBtn.style.display = 'none'; zoomSlider.style.display = 'none'; return; }
-            const caps = camTrack.getCapabilities ? camTrack.getCapabilities() : {};
-            const setts = camTrack.getSettings ? camTrack.getSettings() : {};
-
-            if (caps.torch) {
-                torchBtn.style.display = '';
-                let on = false; torchBtn.textContent = 'Torch: Off';
-                torchBtn.onclick = async () => {
-                    on = !on;
-                    try { await camTrack.applyConstraints({ advanced: [{ torch: on }] }); torchBtn.textContent = on ? 'Torch: On' : 'Torch: Off'; }
-                    catch { toast('Torch not available now', 'err'); }
-                };
-            } else torchBtn.style.display = 'none';
-
-            if (typeof caps.zoom === 'number' || (caps.zoom && 'min' in caps.zoom)) {
-                const min = caps.zoom.min ?? 1, max = caps.zoom.max ?? Math.max(1, Number(setts.zoom) || 2), step = caps.zoom.step ?? 0.1;
-                zoomSlider.min = String(min); zoomSlider.max = String(max); zoomSlider.step = String(step);
-                zoomSlider.value = String(setts.zoom ?? min); zoomSlider.style.display = '';
-                zoomSlider.oninput = async () => {
-                    try { await camTrack.applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] }); }
-                    catch { try { await camTrack.applyConstraints({ zoom: Number(zoomSlider.value) }); } catch { } }
-                };
-            } else zoomSlider.style.display = 'none';
-        }
-
-        async function startScanner() {
-            if (location.protocol === "file:") toast("Open via https:// or http://localhost — camera is usually blocked on file://", "err");
-
-            const zxingOK = await loadZXingIfNeeded();
-            setScannerSourceBadge();
-
-            if (!zxingOK && !hasBarcodeDetector) {
-                toast("Scanner lib not loaded and no BarcodeDetector. Whitelist cdn.jsdelivr.net / unpkg.com, or place zxing-browser.min.js next to this file.", "err");
-                return;
-            }
-
-            scanArea.style.display = 'block';
-            hudReset(); startHudTimer();
-
-            // Preflight permission + frame size
-            let preflight;
-            try {
-                preflight = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        facingMode: "environment",
-                        width: { ideal: hiRes ? 1920 : 1280 },
-                        height: { ideal: hiRes ? 1080 : 720 }
-                    },
-                    audio: false
-                });
-            } catch (e) {
-                let msg = 'Camera error: ' + (e.name || '') + ' ' + (e.message || '');
-                if (e.name === 'NotAllowedError') msg = 'Permission blocked. Use https or localhost, then tap “Test camera”.';
-                if (e.name === 'NotFoundError') msg = 'No camera found or accessible.';
-                if (e.name === 'NotReadableError') msg = 'Camera is busy (another app is using it).';
-                if (e.name === 'SecurityError') msg = 'Insecure origin. Use https:// or http://localhost.';
-                toast(msg, 'err'); scanArea.style.display = 'none'; stopHudTimer(); return;
-            }
-
-            videoEl.srcObject = preflight; await videoEl.play();
-            await setupCameraControls(preflight);
-
-            // Try to swap to explicit back camera if ZXing is present
-            try {
-                if (zxingOK) {
-                    const ZX = window.ZXingBrowser;
-                    const devices = await ZX.BrowserMultiFormatReader.listVideoInputDevices();
-                    const back = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[0];
-                    if (back?.deviceId) {
-                        preflight.getTracks().forEach(t => t.stop());
-                        stream = await navigator.mediaDevices.getUserMedia({
-                            video: {
-                                deviceId: { exact: back.deviceId },
-                                width: { ideal: hiRes ? 1920 : 1280 },
-                                height: { ideal: hiRes ? 1080 : 720 }
-                            },
-                            audio: false
-                        });
-                        videoEl.srcObject = stream; await videoEl.play(); await setupCameraControls(stream);
-                    } else { stream = preflight; }
-                } else { stream = preflight; }
-            } catch (e) { console.warn('Back-camera swap failed, using preflight stream:', e); stream = preflight; }
-
-            // Decode from the already-playing <video>
-            if (zxingOK) {
-                const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = window.ZXingBrowser;
-                reader = new BrowserMultiFormatReader(new Map([
-                    [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
-                    [DecodeHintType.TRY_HARDER, true],
-                    [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]] // comic +2/+5
-                ]), 200);
-
-                reader.decodeFromVideoElementContinuously(videoEl, (result, err) => {
-                    if (result && result.text) {
-                        lastFoundAt = Date.now();
-                        const code = result.text.replace(/\s+/g, '');
-                        setSearchFromBarcode(code);
-                        setTimeout(() => stopScanner(), 150);
-                    }
-                    // ignore NotFoundException frames
-                });
-
-            } else {
-                const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
-                const loop = async () => {
-                    if (!stream) return;
-                    try {
-                        const codes = await detector.detect(videoEl);
-                        if (codes && codes[0]?.rawValue) {
-                            lastFoundAt = Date.now();
-                            const code = codes[0].rawValue.replace(/\s+/g, '');
-                            setSearchFromBarcode(code);
-                            await stopScanner(); return;
-                        }
-                    } catch (e) { }
-                    requestAnimationFrame(loop);
-                };
-                loop();
-            }
-        }
-
-        scanBtn.addEventListener('click', async () => {
-            try { if (reader || stream) await stopScanner(); else await startScanner(); }
-            catch (err) { toast('Camera unavailable. Try https:// or localhost.', 'err'); console.error(err); }
-        });
-
-        /* Test camera */
-        testCamBtn.addEventListener('click', async () => {
-            try { const st = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); st.getTracks().forEach(t => t.stop()); toast('Camera test: OK', 'ok'); }
-            catch (e) {
-                let msg = 'Camera test failed: ' + (e.name || '') + ' ' + (e.message || '');
-                if (e.name === 'NotAllowedError') msg = 'Permission blocked. Enable it in browser/site settings (use https or localhost).';
-                if (e.name === 'NotFoundError') msg = 'No camera found or not accessible.';
-                if (e.name === 'SecurityError') msg = 'Insecure origin. Use https:// or http://localhost.';
-                if (e.name === 'NotReadableError') msg = 'Camera is busy (another app is using it).';
-                toast(msg, 'err');
-            }
-        });
-
-        /* ===== Hi-Res toggle ===== */
-        hiResBtn.addEventListener('click', async () => {
-            hiRes = !hiRes;
-            hiResBtn.textContent = hiRes ? 'Hi-Res: On' : 'Hi-Res';
-            if (reader || stream) { await stopScanner(); await startScanner(); }
-        });
-
-        /* ===== Snap & Scan ===== */
-        function cropToCrosshairCanvas() {
-            const v = videoEl; const box = crosshair.getBoundingClientRect(); const vid = v.getBoundingClientRect();
-            const vw = v.videoWidth || 1280, vh = v.videoHeight || 720;
-            if (!vw || !vh) return null;
-            const sx = Math.max(0, Math.round((box.left - vid.left) / vid.width * vw));
+        function cropToCrosshairCanvas(widenRightRatio = 0) {
+            const v = videoEl, box = crosshair.getBoundingClientRect(), vid = v.getBoundingClientRect();
+            const vw = v.videoWidth || 1280, vh = v.videoHeight || 720; if (!vw || !vh) return null;
+            let sx = Math.max(0, Math.round((box.left - vid.left) / vid.width * vw));
             const sy = Math.max(0, Math.round((box.top - vid.top) / vid.height * vh));
-            const sw = Math.min(vw - sx, Math.round(box.width / vid.width * vw));
+            let sw = Math.min(vw - sx, Math.round(box.width / vid.width * vw));
             const sh = Math.min(vh - sy, Math.round(box.height / vid.height * vh));
-            const c = document.createElement('canvas');
-            c.width = sw; c.height = sh;
-            c.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
-            return c;
+            if (widenRightRatio > 0) {
+                const extra = Math.round(sw * widenRightRatio);
+                if (sx + sw + extra <= vw) sw += extra; else { const over = (sx + sw + extra) - vw; sx = Math.max(0, sx - over); sw = Math.min(vw - sx, sw + extra); }
+            }
+            const c = document.createElement('canvas'); c.width = sw; c.height = sh; const g = c.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh); return c;
         }
         async function decodeCanvas(c) {
-            if ('BarcodeDetector' in window) {
-                try {
-                    const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
-                    const res = await det.detect(c);
-                    if (res && res[0]?.rawValue) return res[0].rawValue;
-                } catch { }
+            const work = upscaleForDecode(c, 2);
+            if (hasBD) {
+                try { const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] }); const hits = await det.detect(work); if (hits && hits[0]?.rawValue) return hits[0].rawValue; } catch { }
             }
             try {
-                const ZX = window.ZXingBrowser;
-                if (ZX?.BrowserMultiFormatReader) {
+                const ZX = window.ZXingBrowser; if (ZX?.BrowserMultiFormatReader) {
                     const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = ZX;
                     const r = new BrowserMultiFormatReader(new Map([
                         [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
                         [DecodeHintType.TRY_HARDER, true],
                         [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]]
                     ]), 200);
-                    const out = await r.decodeFromCanvas(c);
-                    if (out?.text) return out.text;
+                    const out = await r.decodeFromCanvas(work); if (out?.text) return out.text;
                 }
             } catch { }
             return null;
         }
-        snapBtn.addEventListener('click', async () => {
-            if (!stream) { toast('Tap 📷 Scan first', 'err'); return; }
-            hudStatus.textContent = 'Analyzing…'; hudMsg.className = 'hudMsg';
-            let canvas = null;
 
-            // Prefer a sharp grab via ImageCapture if available
+        /* Auto still-capture pipeline (runs during scanning if live decode stalls) */
+        async function autoSnapTry({ widen = 0.35, hiResPhoto = false } = {}) {
+            if (!stream) return null;
+            let canvas = null;
             try {
                 const track = (stream.getVideoTracks && stream.getVideoTracks()[0]) || null;
-                if ('ImageCapture' in window && track) {
+                if (hiResPhoto && 'ImageCapture' in window && track) {
                     const cap = new ImageCapture(track);
-                    const blob = await cap.takePhoto({ imageWidth: hiRes ? 2592 : 1920 });
+                    const blob = await cap.takePhoto({ imageWidth: 2592 }); // sharp photo
                     const img = await createImageBitmap(blob);
-                    const full = document.createElement('canvas');
-                    full.width = img.width; full.height = img.height;
-                    full.getContext('2d').drawImage(img, 0, 0);
-
-                    // Crop proportions from live crosshair
-                    const v = videoEl;
-                    const box = crosshair.getBoundingClientRect();
-                    const vid = v.getBoundingClientRect();
-                    const sx = Math.max(0, Math.round((box.left - vid.left) / vid.width * img.width));
+                    const full = document.createElement('canvas'); full.width = img.width; full.height = img.height; full.getContext('2d').drawImage(img, 0, 0);
+                    // crop using crosshair proportions
+                    const v = videoEl, box = crosshair.getBoundingClientRect(), vid = v.getBoundingClientRect();
+                    let sx = Math.max(0, Math.round((box.left - vid.left) / vid.width * img.width));
                     const sy = Math.max(0, Math.round((box.top - vid.top) / vid.height * img.height));
-                    const sw = Math.min(img.width - sx, Math.round(box.width / vid.width * img.width));
+                    let sw = Math.min(img.width - sx, Math.round(box.width / vid.width * img.width));
                     const sh = Math.min(img.height - sy, Math.round(box.height / vid.height * img.height));
-
-                    canvas = document.createElement('canvas'); canvas.width = sw; canvas.height = sh;
-                    canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+                    if (widen > 0) { const extra = Math.round(sw * widen); if (sx + sw + extra <= img.width) sw += extra; else { const over = (sx + sw + extra) - img.width; sx = Math.max(0, sx - over); sw = Math.min(img.width - sx, sw + extra); } }
+                    canvas = document.createElement('canvas'); canvas.width = sw; canvas.height = sh; canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
                 }
-            } catch { /* ignore & fall back */ }
+            } catch { }
+            if (!canvas) canvas = cropToCrosshairCanvas(widen);
+            if (!canvas) return null;
 
-            if (!canvas) canvas = cropToCrosshairCanvas();
-            if (!canvas) { toast('No frame yet — try again', 'err'); return; }
+            // First pass
+            let code = await decodeCanvas(canvas); let d = code ? code.replace(/\D/g, '') : '';
 
-            const code = await decodeCanvas(canvas);
-            if (code) {
-                setSearchFromBarcode(code.replace(/\s+/g, ''));
-                setTimeout(() => stopScanner(), 200);
-            } else {
-                hudHint();
-                toast('No code in snapshot — move closer, try torch/zoom', 'err');
+            // If we only got 12/13, aggressively widen to capture add-on
+            const mainOnly = (d.length === 12 || d.length === 13);
+            if (mainOnly) {
+                const wider = cropToCrosshairCanvas(0.65); if (wider) { const code2 = await decodeCanvas(wider); const d2 = code2 ? code2.replace(/\D/g, '') : ''; if ([14, 15, 17, 18].includes(d2.length)) code = code2; }
             }
+            return code;
+        }
+
+        async function stopScanner() {
+            try { reader && reader.reset && reader.reset(); } catch { }
+            try { reader && reader.stopStreams && reader.stopStreams(); } catch { }
+            try { stream && stream.getTracks().forEach(t => t.stop()); } catch { }
+            reader = null; stream = null; camTrack = null; scanArea.style.display = 'none'; torchBtn.style.display = 'none'; zoomSlider.style.display = 'none'; stopHud(); hudReset();
+        }
+
+        async function setupCameraControls(s) {
+            camTrack = (s && s.getVideoTracks && s.getVideoTracks()[0]) || null;
+            if (!camTrack) { torchBtn.style.display = 'none'; zoomSlider.style.display = 'none'; return; }
+            const caps = camTrack.getCapabilities ? camTrack.getCapabilities() : {}; const setts = camTrack.getSettings ? camTrack.getSettings() : {};
+
+            // Torch
+            if (caps.torch) {
+                torchBtn.style.display = ''; let on = false; torchBtn.textContent = 'Torch: Off';
+                torchBtn.onclick = async () => { on = !on; try { await camTrack.applyConstraints({ advanced: [{ torch: on }] }); torchBtn.textContent = on ? 'Torch: On' : 'Torch: Off'; } catch { toast('Torch not available now', 'err'); } };
+            } else torchBtn.style.display = 'none';
+
+            // Zoom
+            if (typeof caps.zoom === 'number' || (caps.zoom && 'min' in caps.zoom)) {
+                const min = caps.zoom.min ?? 1, max = caps.zoom.max ?? Math.max(1, Number(setts.zoom) || 2), step = caps.zoom.step ?? 0.1;
+                zoomSlider.min = String(min); zoomSlider.max = String(max); zoomSlider.step = String(step);
+                zoomSlider.value = String(setts.zoom ?? min); zoomSlider.style.display = '';
+                zoomSlider.oninput = async () => { try { await camTrack.applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] }); } catch { try { await camTrack.applyConstraints({ zoom: Number(zoomSlider.value) }); } catch { } } };
+            } else zoomSlider.style.display = 'none';
+
+            // Try continuous autofocus if supported
+            try {
+                const fm = caps.focusMode;
+                if (fm && (Array.isArray(fm) ? fm.includes('continuous') : fm === 'continuous')) {
+                    await camTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+                }
+            } catch { }
+        }
+
+        async function startScanner() {
+            if (location.protocol === "file:") toast("Open via https:// or http://localhost — camera is usually blocked on file://", "err");
+            const zxingOK = await loadZXingIfNeeded(); setScannerSourceBadge();
+            if (!zxingOK && !hasBarcodeDetector) { toast("Scanner lib not loaded and no BarcodeDetector.", "err"); return; }
+
+            scanArea.style.display = 'block'; startHud();
+
+            // Preflight (720p+)
+            let preflight;
+            try {
+                preflight = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+            } catch (e) { toast('Camera error: ' + (e.name || ''), 'err'); scanArea.style.display = 'none'; stopHud(); return; }
+
+            videoEl.srcObject = preflight; await videoEl.play(); await setupCameraControls(preflight);
+
+            // Pick explicit back camera if we can
+            try {
+                if (zxingOK) {
+                    const ZX = window.ZXingBrowser; const devices = await ZX.BrowserMultiFormatReader.listVideoInputDevices();
+                    const back = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[0];
+                    if (back?.deviceId) {
+                        preflight.getTracks().forEach(t => t.stop());
+                        stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: back.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+                        videoEl.srcObject = stream; await videoEl.play(); await setupCameraControls(stream);
+                    } else stream = preflight;
+                } else stream = preflight;
+            } catch { stream = preflight; }
+
+            // Live decode from <video>
+            let settled = false, fallback1, fallback2;
+            function settle(code) { if (settled) return; settled = true; clearTimeout(fallback1); clearTimeout(fallback2); setSearchFromBarcode(code); setTimeout(() => stopScanner(), 150); }
+
+            if (zxingOK) {
+                const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = window.ZXingBrowser;
+                reader = new BrowserMultiFormatReader(new Map([
+                    [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
+                    [DecodeHintType.TRY_HARDER, true],
+                    [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]]
+                ]), 200);
+
+                reader.decodeFromVideoElementContinuously(videoEl, (result, err) => {
+                    if (result && result.text) { settle(result.text.replace(/\s+/g, '')); }
+                    // ignore NotFoundException frames
+                });
+            } else {
+                const det = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
+                const loop = async () => {
+                    if (!stream || settled) return;
+                    try { const codes = await det.detect(videoEl); if (codes && codes[0]?.rawValue) { settle(codes[0].rawValue.replace(/\s+/g, '')); return; } } catch { }
+                    requestAnimationFrame(loop);
+                }; loop();
+            }
+
+            // Auto still-capture fallbacks (no buttons):
+            // After ~1.2s, try widened crop (video frame)
+            fallback1 = setTimeout(async () => { if (settled) return; const code = await autoSnapTry({ widen: 0.35, hiResPhoto: false }); if (code) { settle(code.replace(/\s+/g, '')); } }, 1200);
+            // After ~2.6s, try hi-res photo + aggressive widen to catch add-ons
+            fallback2 = setTimeout(async () => { if (settled) return; const code = await autoSnapTry({ widen: 0.65, hiResPhoto: true }); if (code) { settle(code.replace(/\s+/g, '')); } }, 2600);
+        }
+
+        scanBtn.addEventListener('click', async () => { try { if (reader || stream) await stopScanner(); else await startScanner(); } catch (err) { toast('Camera unavailable. Try https:// or localhost.', 'err'); console.error(err); } });
+
+        /* Test camera */
+        testCamBtn.addEventListener('click', async () => {
+            try { const st = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); st.getTracks().forEach(t => t.stop()); toast('Camera test: OK', 'ok'); }
+            catch (e) { let msg = 'Camera test failed: ' + (e.name || '') + ' ' + (e.message || ''); if (e.name === 'NotAllowedError') msg = 'Permission blocked. Enable in site settings (use https or localhost).'; if (e.name === 'SecurityError') msg = 'Use https:// or http://localhost.'; toast(msg, 'err'); }
         });
 
-        /* Add photo (per-card) */
+        /* Per-card Add photo */
         let currentPhotoKey = null;
-        const hiddenPhotoInput = document.createElement('input');
-        hiddenPhotoInput.type = 'file'; hiddenPhotoInput.accept = 'image/*'; hiddenPhotoInput.capture = 'environment'; hiddenPhotoInput.style.display = 'none';
-        hiddenPhotoInput.addEventListener('change', () => {
-            const f = hiddenPhotoInput.files[0]; if (!f || !currentPhotoKey) return;
-            const url = URL.createObjectURL(f); objURLs.add(url); imgMap.set(currentPhotoKey, url); currentPhotoKey = null; renderCards();
-        });
+        const hiddenPhotoInput = document.createElement('input'); hiddenPhotoInput.type = 'file'; hiddenPhotoInput.accept = 'image/*'; hiddenPhotoInput.capture = 'environment'; hiddenPhotoInput.style.display = 'none';
+        hiddenPhotoInput.addEventListener('change', () => { const f = hiddenPhotoInput.files[0]; if (!f || !currentPhotoKey) return; const url = URL.createObjectURL(f); objURLs.add(url); imgMap.set(currentPhotoKey, url); currentPhotoKey = null; renderCards(); });
         document.body.appendChild(hiddenPhotoInput);
 
         /* Cleanup */
         window.addEventListener('beforeunload', () => { objURLs.forEach(u => URL.revokeObjectURL(u)); });
 
-        /* ===== Results & rendering helpers ===== */
-        function updateCounts() { countsEl.textContent = `Staged: ${stagedOrder.length} • Results: ${filtered.length}`; }
-
-        /* Init badge */
+        /* Init */
         setScannerSourceBadge();
     </script>
 </body>
