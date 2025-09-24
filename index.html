@@ -5,7 +5,6 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inventory Stager — Calm Cards + Reliable Scan</title>
-
     <style>
         :root {
             --bg: #0b1020;
@@ -14,8 +13,6 @@
             --muted: #94a3b8;
             --card: #0b1224;
             --border: #1f2937;
-            --ok: #16a34a;
-            --warn: #ef4444;
             --shadow: 0 12px 30px rgba(0, 0, 0, .28);
             --thumb: 96px;
         }
@@ -330,7 +327,7 @@
 <body>
     <div class="header">
         <div class="wrap">
-            <div class="row" style="justify-content:space-between; align-items:center">
+            <div class="row" style="justify-content:space-between;align-items:center">
                 <div class="title">Inventory Stager <span class="pill">offline</span></div>
                 <div class="row">
                     <span id="scannerSource" class="pill">Scanner: (not loaded)</span>
@@ -344,6 +341,9 @@
                     style="min-width:220px" />
                 <button id="scanBtn" class="btn">📷 Scan</button>
                 <button id="testCam" class="btn" title="Quick permission/connection check">Test camera</button>
+                <button id="torchBtn" class="btn" style="display:none">Torch</button>
+                <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" class="input"
+                    style="display:none;width:140px" title="Zoom">
                 <div class="scanWrap" id="scanArea"><video id="preview" playsinline></video></div>
             </div>
 
@@ -366,10 +366,9 @@
                 <h3 id="resultsTitle">Results</h3>
                 <div id="resultsList"></div>
             </div>
-
             <div>
                 <div class="cards" id="cards"></div>
-                <div class="row" style="justify-content:flex-end; gap:10px; margin-top:10px">
+                <div class="row" style="justify-content:flex-end;gap:10px;margin-top:10px">
                     <span>Adjust by</span>
                     <input id="by" type="number" min="1" value="1" class="input n" />
                     <button id="undo" class="btn">Undo</button>
@@ -382,7 +381,7 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <script>
-        /* ========= Robust ZXing loader + feature detection ========= */
+        /* ===== ZXing loader with many fallbacks (and badge) ===== */
         let ZX_SRC = '(none)';
         async function loadZXingIfNeeded() {
             if (window.ZXingBrowser) return 'inline';
@@ -390,14 +389,11 @@
                 ["jsDelivr UMD", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg UMD", "https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg auto", "https://unpkg.com/@zxing/browser@0.1.5"],
-                ["local UMD", "./zxing-browser.min.js"] // optional local file next to this HTML
+                ["local UMD", "./zxing-browser.min.js"] // optional file next to index.html
             ];
             for (const [label, src] of UMDs) {
                 try {
-                    await new Promise((ok, err) => {
-                        const s = document.createElement("script"); s.src = src; s.async = true;
-                        s.onload = ok; s.onerror = err; document.head.appendChild(s);
-                    });
+                    await new Promise((ok, err) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = ok; s.onerror = err; document.head.appendChild(s); });
                     if (window.ZXingBrowser) { ZX_SRC = label; return label; }
                 } catch (e) { }
             }
@@ -406,21 +402,17 @@
                 ["esm.run ESM", "https://esm.run/@zxing/browser@0.1.5"]
             ];
             for (const [label, url] of ESMS) {
-                try {
-                    const mod = await import(url);
-                    if (mod?.BrowserMultiFormatReader) { window.ZXingBrowser = mod; ZX_SRC = label; return label; }
-                } catch (e) { }
+                try { const mod = await import(url); if (mod?.BrowserMultiFormatReader) { window.ZXingBrowser = mod; ZX_SRC = label; return label; } } catch (e) { }
             }
             return null;
         }
         const hasBarcodeDetector = "BarcodeDetector" in window;
         function setScannerSourceBadge() {
-            const el = document.getElementById('scannerSource');
-            if (!el) return;
+            const el = document.getElementById('scannerSource'); if (!el) return;
             el.textContent = 'Scanner: ' + (ZX_SRC || (hasBarcodeDetector ? 'BarcodeDetector' : '(not loaded)'));
         }
 
-        /* ========= CSV helpers ========= */
+        /* ===== CSV helpers ===== */
         function parseCSV(text) {
             const out = [], headers = []; let i = 0, f = '', rec = [], q = false, c = '';
             text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -437,12 +429,12 @@
         function csvEscape(v) { const s = String(v ?? ''); const need = /[",\n]/.test(s); const esc = s.replace(/"/g, '""'); return need ? `"${esc}"` : esc; }
         function toCSV(headers, rows) { const lines = [headers.map(csvEscape).join(',')]; rows.forEach(o => lines.push(headers.map(h => csvEscape(o[h])).join(','))); return lines.join('\n'); }
 
-        /* ========= State ========= */
+        /* ===== State ===== */
         let headers = [], rows = [], history = [];
         let filtered = []; const stagedOrder = []; const stagedSet = new Set(); const indexByKey = new Map();
         let imageHeader = null; const imgMap = new Map(); const objURLs = new Set();
 
-        /* ========= Elements ========= */
+        /* ===== Elements ===== */
         const E = id => document.getElementById(id);
         const statusEl = E('status'), toastEl = E('toast');
         const fileEl = E('file'), searchEl = E('search');
@@ -451,7 +443,7 @@
         const resultsList = E('resultsList'), resultsTitle = E('resultsTitle');
         const cardsEl = E('cards');
         const scanBtn = E('scanBtn'), scanArea = E('scanArea'), videoEl = E('preview');
-        const imgFilesEl = E('imgFiles'), testCamBtn = E('testCam');
+        const imgFilesEl = E('imgFiles'), testCamBtn = E('testCam'), torchBtn = E('torchBtn'), zoomSlider = E('zoomSlider');
 
         function setStatus(msg) { statusEl.textContent = msg; }
         function toast(msg, kind = 'ok') {
@@ -459,7 +451,7 @@
             clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.style.display = 'none', 1800);
         }
 
-        /* ========= Header + row helpers ========= */
+        /* ===== Header/row helpers ===== */
         function findHeader(name) { const low = name.toLowerCase(); return headers.find(h => h.toLowerCase() === low); }
         function needHeaders() { if (!findHeader('Quantity')) throw new Error('Missing required column: Quantity'); if (!findHeader('Barcode')) throw new Error('Missing required column: Barcode'); }
         function detectImageHeader() { imageHeader = headers.find(h => /image|cover\s*image|cover\s*url|thumbnail/i.test(h)) || null; }
@@ -471,57 +463,38 @@
         function updateIndex() { indexByKey.clear(); rows.forEach((o, i) => indexByKey.set(keyOf(o, i), i)); }
         function updateCounts() { countsEl.textContent = `Staged: ${stagedOrder.length} • Results: ${filtered.length}`; }
 
-        /* ========= Images ========= */
+        /* ===== Images ===== */
         function urlForKey(key, o) {
             if (imgMap.has(key)) return imgMap.get(key);
-            if (imageHeader) {
-                const v = o[imageHeader];
-                if (v && /^https?:\/\//i.test(v)) return v;
-                if (v && v.startsWith('data:image/')) return v;
-            }
+            if (imageHeader) { const v = o[imageHeader]; if (v && /^https?:\/\//i.test(v)) return v; if (v && v.startsWith('data:image/')) return v; }
             return null;
         }
+        // Bulk add by filenames (012345678905.jpg or 01234567890551234.png)
         imgFilesEl.addEventListener('change', async (e) => {
             const files = [...(e.target.files || [])]; if (!files.length) return;
-            let assigned = 0;
-            const by12 = new Map(), by17 = new Map();
+            let assigned = 0; const by12 = new Map(), by17 = new Map();
             rows.forEach((o, i) => {
-                const b = digits(get(o, 'Barcode')); if (!b) return;
-                const k = keyOf(o, i);
+                const b = digits(get(o, 'Barcode')); if (!b) return; const k = keyOf(o, i);
                 if (b.length >= 12) {
                     const d12 = b.slice(0, 12); (by12.get(d12) || by12.set(d12, []).get(d12)).push(k);
                     if (b.length >= 17) { const d17 = b.slice(0, 17); (by17.get(d17) || by17.set(d17, []).get(d17)).push(k); }
                 }
             });
             for (const f of files) {
-                const nameDigits = digits(f.name);
-                let targets = null;
+                const nameDigits = digits(f.name); let targets = null;
                 if (nameDigits.length >= 17 && by17.get(nameDigits.slice(0, 17))) targets = by17.get(nameDigits.slice(0, 17));
                 else if (nameDigits.length >= 12 && by12.get(nameDigits.slice(0, 12))) targets = by12.get(nameDigits.slice(0, 12));
-                if (targets && targets.length) {
-                    const url = URL.createObjectURL(f); objURLs.add(url);
-                    targets.forEach(k => imgMap.set(k, url)); assigned += targets.length;
-                }
+                if (targets && targets.length) { const url = URL.createObjectURL(f); objURLs.add(url); targets.forEach(k => imgMap.set(k, url)); assigned += targets.length; }
             }
             toast(`Added images for ${assigned} item${assigned === 1 ? '' : 's'}`, 'ok'); renderCards();
         });
 
-        /* Per-card Add photo (camera or gallery) */
-        let currentPhotoKey = null;
-        const hiddenPhotoInput = document.createElement('input');
-        hiddenPhotoInput.type = 'file'; hiddenPhotoInput.accept = 'image/*'; hiddenPhotoInput.capture = 'environment'; hiddenPhotoInput.style.display = 'none';
-        hiddenPhotoInput.addEventListener('change', () => {
-            const f = hiddenPhotoInput.files[0]; if (!f || !currentPhotoKey) return;
-            const url = URL.createObjectURL(f); objURLs.add(url); imgMap.set(currentPhotoKey, url); currentPhotoKey = null; renderCards();
-        });
-        document.body.appendChild(hiddenPhotoInput);
-
-        /* ========= Staging ========= */
+        /* ===== Staging ===== */
         function stageKey(key) { if (!indexByKey.has(key) || stagedSet.has(key)) return; stagedSet.add(key); stagedOrder.push(key); renderCards(); updateCounts(); }
         function releaseKey(key) { if (!stagedSet.has(key)) return; stagedSet.delete(key); const i = stagedOrder.indexOf(key); if (i >= 0) stagedOrder.splice(i, 1); renderCards(); updateCounts(); }
         E('clearStaged').addEventListener('click', () => { stagedSet.clear(); stagedOrder.length = 0; renderCards(); updateCounts(); });
 
-        /* ========= Results (search) ========= */
+        /* ===== Results (search) ===== */
         function applyFilter() {
             const qRaw = searchEl.value.trim(); const q = qRaw.toLowerCase(); const qDigits = digits(qRaw);
             const out = [];
@@ -535,8 +508,7 @@
                     if (!match && qDigits.length === 12 && b.startsWith(qDigits)) match = true;
                 }
                 if (!match) { match = headers.some(h => String(o[h] ?? '').toLowerCase().includes(q)); }
-                if (match) out.push({ o, i });
-                if (out.length >= 50) break;
+                if (match) out.push({ o, i }); if (out.length >= 50) break;
             }
             filtered = out; renderResults(); updateCounts();
         }
@@ -557,11 +529,12 @@
             });
         }
 
-        /* ========= Cards (staged only) ========= */
+        /* ===== Cards (staged only) ===== */
         function renderCards() {
-            cardsEl.innerHTML = ''; document.documentElement.classList.toggle('bigthumb', E('bigPics').checked);
+            cardsEl.innerHTML = ''; document.documentElement.classList.toggle('light', lightModeEl.checked);
+            document.documentElement.classList.toggle('bigthumb', bigPicsEl.checked);
             if (!stagedOrder.length) { const empty = document.createElement('div'); empty.className = 'meta'; empty.style.padding = '12px'; empty.textContent = 'Nothing staged yet. Search or scan to stage items here.'; cardsEl.appendChild(empty); return; }
-            const showEdits = E('editMode').checked;
+            const showEdits = editModeEl.checked;
 
             stagedOrder.forEach(key => {
                 const idx = indexByKey.get(key); if (idx == null) return;
@@ -580,7 +553,7 @@
 
                 const left = document.createElement('div');
                 left.innerHTML = `<div style="font-weight:700">${title}</div>
-                          <div class="meta">${barcode ? 'Barcode: ' + barcode : ''}${meta ? (barcode ? ' • ' : '') + meta : ''}</div>`;
+                      <div class="meta">${barcode ? 'Barcode: ' + barcode : ''}${meta ? (barcode ? ' • ' : '') + meta : ''}</div>`;
 
                 const right = document.createElement('div'); right.style.textAlign = 'right';
                 const qtySpan = document.createElement('span'); qtySpan.className = 'qty'; qtySpan.textContent = qty; right.appendChild(qtySpan);
@@ -609,6 +582,7 @@
                     history.push({ index: idx, delta: d });
                     qtySpan.textContent = after;
                     setStatus(`Updated ${barcode} → ${after}`); toast(`${d < 0 ? '−' : '+'}${Math.abs(d)} ${get(o, 'Series') || get(o, 'Publisher') || ''}`, 'ok');
+                    try { navigator.vibrate && navigator.vibrate(30); } catch { }
                 }
                 minus.addEventListener('click', () => applyDelta(-Math.max(1, Number(nInp.value) || 1)));
                 plus.addEventListener('click', () => applyDelta(Math.max(1, Number(nInp.value) || 1)));
@@ -639,7 +613,7 @@
             });
         }
 
-        /* ========= File + toggles ========= */
+        /* ===== File + toggles ===== */
         fileEl.addEventListener('change', async (e) => {
             const f = e.target.files[0]; if (!f) return;
             const text = await f.text();
@@ -654,10 +628,10 @@
         searchEl.addEventListener('input', applyFilter);
         byEl.addEventListener('change', () => renderCards());
         editModeEl.addEventListener('change', () => renderCards());
-        lightModeEl.addEventListener('change', () => { document.documentElement.classList.toggle('light', lightModeEl.checked); });
+        lightModeEl.addEventListener('change', () => renderCards());
         bigPicsEl.addEventListener('change', () => renderCards());
 
-        /* ========= Undo & Save ========= */
+        /* ===== Undo & Save ===== */
         E('undo').addEventListener('click', () => {
             const last = history.pop(); if (!last) { toast('Nothing to undo'); return; }
             const o = rows[last.index]; if (!o) return;
@@ -674,8 +648,9 @@
             toast('Saved CSV', 'ok'); setStatus('Saved CSV to downloads');
         });
 
-        /* ========= Scanner (ZXing with fallback to BarcodeDetector) ========= */
-        let reader = null, stream = null;
+        /* ===== Scanner (ZXing + fallback + Android Torch/Zoom) ===== */
+        let reader = null, stream = null, camTrack = null;
+
         function normalizeComicBarcode(text) {
             const m = String(text).replace(/[^\d+ ]/g, '').match(/(\d{12,13})(?:[ +\-]?(\d{2,5}))?/);
             return m ? { main: m[1], addon: m[2] || '' } : { main: text.trim(), addon: '' };
@@ -685,21 +660,57 @@
             const combined = (main || '') + (addon || ''); searchEl.value = combined || payload.trim(); applyFilter();
             if (stageOnScanEl.checked && filtered.length) {
                 const best = filtered.find(({ o, i }) => {
-                    const b = digits(get(o, 'Barcode')); return combined && (b === combined || b.startsWith(combined) || combined.startsWith(b));
+                    const b = digits(get(o, 'Barcode'));
+                    return combined && (b === combined || b.startsWith(combined) || combined.startsWith(b));
                 }) || filtered[0];
                 stageKey(keyOf(best.o, best.i)); toast('Staged from scan', 'ok');
             } else {
                 toast(`Scanned ${addon ? main + ' + ' + addon : main}`, 'ok');
             }
         }
+
         async function stopScanner() {
             try { reader && reader.stopStreams && reader.stopStreams(); } catch { }
             try { stream && stream.getTracks().forEach(t => t.stop()); } catch { }
-            reader = null; stream = null; scanArea.style.display = 'none';
+            reader = null; stream = null; camTrack = null; scanArea.style.display = 'none';
+            torchBtn.style.display = 'none'; zoomSlider.style.display = 'none';
+        }
+
+        async function setupCameraControls(s) {
+            camTrack = (s && s.getVideoTracks && s.getVideoTracks()[0]) || null;
+            if (!camTrack) { torchBtn.style.display = 'none'; zoomSlider.style.display = 'none'; return; }
+            const caps = camTrack.getCapabilities ? camTrack.getCapabilities() : {};
+            const setts = camTrack.getSettings ? camTrack.getSettings() : {};
+
+            // Torch
+            if (caps.torch) {
+                torchBtn.style.display = '';
+                let on = false; torchBtn.textContent = 'Torch: Off';
+                torchBtn.onclick = async () => {
+                    on = !on;
+                    try {
+                        await camTrack.applyConstraints({ advanced: [{ torch: on }] });
+                        torchBtn.textContent = on ? 'Torch: On' : 'Torch: Off';
+                    } catch { toast('Torch not available now', 'err'); }
+                };
+            } else torchBtn.style.display = 'none';
+
+            // Zoom
+            if (typeof caps.zoom === 'number' || (caps.zoom && 'min' in caps.zoom)) {
+                const min = caps.zoom.min ?? 1, max = caps.zoom.max ?? Math.max(1, Number(setts.zoom) || 2);
+                const step = caps.zoom.step ?? 0.1;
+                zoomSlider.min = String(min); zoomSlider.max = String(max); zoomSlider.step = String(step);
+                zoomSlider.value = String(setts.zoom ?? min); zoomSlider.style.display = '';
+                zoomSlider.oninput = async () => {
+                    try {
+                        await camTrack.applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] });
+                    } catch { try { await camTrack.applyConstraints({ zoom: Number(zoomSlider.value) }); } catch { } }
+                };
+            } else zoomSlider.style.display = 'none';
         }
 
         async function startScanner() {
-            if (location.protocol === "file:") toast("Open via http(s) — camera is usually blocked on file://", "err");
+            if (location.protocol === "file:") toast("Open via https:// or http://localhost — camera is usually blocked on file://", "err");
 
             const zxingOK = await loadZXingIfNeeded();
             setScannerSourceBadge();
@@ -711,44 +722,50 @@
 
             scanArea.style.display = 'block';
 
+            // STEP 1: preflight permission (environment if possible)
+            let preflight;
             try {
-                const ZX = window.ZXingBrowser;
-                const devices = zxingOK ? await ZX.BrowserMultiFormatReader.listVideoInputDevices() : [];
-                const back = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[0];
-                const constraints = back?.deviceId
-                    ? { video: { deviceId: { exact: back.deviceId } }, audio: false }
-                    : { video: { facingMode: "environment" }, audio: false };
-
-                try {
-                    stream = await navigator.mediaDevices.getUserMedia(constraints);
-                } catch (e) {
-                    if (e.name === 'OverconstrainedError' || e.name === 'NotFoundError') {
-                        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                    } else { throw e; }
-                }
+                preflight = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
             } catch (e) {
                 let msg = 'Camera error: ' + (e.name || '') + ' ' + (e.message || '');
-                if (e.name === 'NotAllowedError') msg = 'Permission blocked. Enable Camera for this site in your browser settings.';
+                if (e.name === 'NotAllowedError') msg = 'Permission blocked. Use https or localhost, then tap “Test camera”.';
                 if (e.name === 'NotFoundError') msg = 'No camera found or accessible.';
-                if (e.name === 'NotReadableError') msg = 'Camera is busy (used by another app). Close other apps and retry.';
+                if (e.name === 'NotReadableError') msg = 'Camera is busy (another app is using it).';
                 if (e.name === 'SecurityError') msg = 'Insecure origin. Use https:// or http://localhost.';
                 toast(msg, 'err'); scanArea.style.display = 'none'; return;
             }
 
-            videoEl.srcObject = stream; await videoEl.play();
+            videoEl.srcObject = preflight; await videoEl.play();
+            await setupCameraControls(preflight);
 
+            // STEP 2: swap to back camera via deviceId if ZXing is present
+            try {
+                if (zxingOK) {
+                    const ZX = window.ZXingBrowser;
+                    const devices = await ZX.BrowserMultiFormatReader.listVideoInputDevices();
+                    const back = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[0];
+                    if (back?.deviceId) {
+                        preflight.getTracks().forEach(t => t.stop());
+                        stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: back.deviceId } }, audio: false });
+                        videoEl.srcObject = stream; await videoEl.play(); await setupCameraControls(stream);
+                    } else { stream = preflight; }
+                } else { stream = preflight; }
+            } catch (e) { console.warn('Back-camera swap failed, using preflight stream:', e); stream = preflight; }
+
+            // STEP 3: decoding loop
             if (zxingOK) {
                 const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = window.ZXingBrowser;
                 reader = new BrowserMultiFormatReader(new Map([
                     [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
-                    [DecodeHintType.TRY_HARDER, true]
+                    [DecodeHintType.TRY_HARDER, true],
+                    [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]] // comic +2 / +5 add-ons
                 ]), 500);
 
                 const loop = async () => {
                     if (!reader) return;
                     try {
                         const result = await reader.decodeOnceFromVideoDevice(undefined, videoEl);
-                        if (result?.text) { setSearchFromBarcode(result.text); await stopScanner(); return; }
+                        if (result?.text) { setSearchFromBarcode(result.text); try { navigator.vibrate && navigator.vibrate(30); } catch { } await stopScanner(); return; }
                     } catch (e) { /* keep trying */ }
                     requestAnimationFrame(loop);
                 };
@@ -759,28 +776,22 @@
                     if (!stream) return;
                     try {
                         const codes = await detector.detect(videoEl);
-                        if (codes && codes[0]?.rawValue) { setSearchFromBarcode(codes[0].rawValue); await stopScanner(); return; }
-                    } catch (e) { /* keep trying */ }
+                        if (codes && codes[0]?.rawValue) { setSearchFromBarcode(codes[0].rawValue); try { navigator.vibrate && navigator.vibrate(30); } catch { } await stopScanner(); return; }
+                    } catch (e) { }
                     requestAnimationFrame(loop);
                 };
                 loop();
             }
         }
 
-        scanBtn.addEventListener('click', async () => {
-            try { if (reader || stream) await stopScanner(); else await startScanner(); }
-            catch (err) { toast('Camera unavailable. Try https:// or localhost.', 'err'); console.error(err); }
-        });
+        scanBtn.addEventListener('click', async () => { try { if (reader || stream) await stopScanner(); else await startScanner(); } catch (err) { toast('Camera unavailable. Try https:// or localhost.', 'err'); console.error(err); } });
 
-        /* ========= One-click camera test (diagnostics) ========= */
+        /* ===== Test camera ===== */
         testCamBtn.addEventListener('click', async () => {
-            try {
-                const st = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-                st.getTracks().forEach(t => t.stop());
-                toast('Camera test: OK', 'ok');
-            } catch (e) {
+            try { const st = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); st.getTracks().forEach(t => t.stop()); toast('Camera test: OK', 'ok'); }
+            catch (e) {
                 let msg = 'Camera test failed: ' + (e.name || '') + ' ' + (e.message || '');
-                if (e.name === 'NotAllowedError') msg = 'Camera permission blocked. Enable it in your browser/site settings.';
+                if (e.name === 'NotAllowedError') msg = 'Permission blocked. Enable it in browser/site settings (use https or localhost).';
                 if (e.name === 'NotFoundError') msg = 'No camera found or not accessible.';
                 if (e.name === 'SecurityError') msg = 'Insecure origin. Use https:// or http://localhost.';
                 if (e.name === 'NotReadableError') msg = 'Camera is busy (another app is using it).';
@@ -788,9 +799,21 @@
             }
         });
 
-        /* ========= Cleanup ========= */
+        /* ===== Per-card Add photo ===== */
+        let currentPhotoKey = null;
+        const hiddenPhotoInput = document.createElement('input');
+        hiddenPhotoInput.type = 'file'; hiddenPhotoInput.accept = 'image/*'; hiddenPhotoInput.capture = 'environment'; hiddenPhotoInput.style.display = 'none';
+        hiddenPhotoInput.addEventListener('change', () => {
+            const f = hiddenPhotoInput.files[0]; if (!f || !currentPhotoKey) return;
+            const url = URL.createObjectURL(f); objURLs.add(url); imgMap.set(currentPhotoKey, url); currentPhotoKey = null; renderCards();
+        });
+        document.body.appendChild(hiddenPhotoInput);
+
+        /* ===== Cleanup ===== */
         window.addEventListener('beforeunload', () => { objURLs.forEach(u => URL.revokeObjectURL(u)); });
-        setScannerSourceBadge(); // initial badge on load
+
+        /* init */
+        setScannerSourceBadge();
     </script>
 </body>
 
