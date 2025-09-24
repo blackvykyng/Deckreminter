@@ -386,10 +386,10 @@
         async function loadZXingIfNeeded() {
             if (window.ZXingBrowser) return 'inline';
             const UMDs = [
+                ["local UMD", "./zxing-browser.min.js"], // local fallback first (if present)
                 ["jsDelivr UMD", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg UMD", "https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
-                ["unpkg auto", "https://unpkg.com/@zxing/browser@0.1.5"],
-                ["local UMD", "./zxing-browser.min.js"] // optional file next to index.html
+                ["unpkg auto", "https://unpkg.com/@zxing/browser@0.1.5"]
             ];
             for (const [label, src] of UMDs) {
                 try {
@@ -423,7 +423,7 @@
             }
             endF(); endR(); if (!out.length) return { headers: [], rows: [] };
             const head = out.shift().map(h => h.trim()); head.forEach(h => headers.push(h));
-            const rows = out.filter(r => r.some(c => (c ?? '').trim().length)).map(cols => { const o = {}; for (let j = 0; j < headers.length; j++) o[headers[j]] = cols[j] ?? ''; return o; });
+            const rows = out.filter(r => r.some(c => (c ?? '').trim().length)).map(cols => { const o = {}; for (let j = 0; j < head.length; j++) o[head[j]] = cols[j] ?? ''; return o; });
             return { headers, rows };
         }
         function csvEscape(v) { const s = String(v ?? ''); const need = /[",\n]/.test(s); const esc = s.replace(/"/g, '""'); return need ? `"${esc}"` : esc; }
@@ -648,7 +648,7 @@
             toast('Saved CSV', 'ok'); setStatus('Saved CSV to downloads');
         });
 
-        /* ===== Scanner (ZXing + fallback + Android Torch/Zoom) ===== */
+        /* ===== Scanner (ZXing from <video> + fallback + Torch/Zoom) ===== */
         let reader = null, stream = null, camTrack = null;
 
         function normalizeComicBarcode(text) {
@@ -670,6 +670,7 @@
         }
 
         async function stopScanner() {
+            try { reader && reader.reset && reader.reset(); } catch { }
             try { reader && reader.stopStreams && reader.stopStreams(); } catch { }
             try { stream && stream.getTracks().forEach(t => t.stop()); } catch { }
             reader = null; stream = null; camTrack = null; scanArea.style.display = 'none';
@@ -722,10 +723,13 @@
 
             scanArea.style.display = 'block';
 
-            // STEP 1: preflight permission (environment if possible)
+            // STEP 1: preflight permission (ask for environment cam; request decent resolution)
             let preflight;
             try {
-                preflight = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+                preflight = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false
+                });
             } catch (e) {
                 let msg = 'Camera error: ' + (e.name || '') + ' ' + (e.message || '');
                 if (e.name === 'NotAllowedError') msg = 'Permission blocked. Use https or localhost, then tap “Test camera”.';
@@ -746,37 +750,46 @@
                     const back = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[0];
                     if (back?.deviceId) {
                         preflight.getTracks().forEach(t => t.stop());
-                        stream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: back.deviceId } }, audio: false });
+                        stream = await navigator.mediaDevices.getUserMedia({
+                            video: { deviceId: { exact: back.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
+                            audio: false
+                        });
                         videoEl.srcObject = stream; await videoEl.play(); await setupCameraControls(stream);
                     } else { stream = preflight; }
                 } else { stream = preflight; }
             } catch (e) { console.warn('Back-camera swap failed, using preflight stream:', e); stream = preflight; }
 
-            // STEP 3: decoding loop
+            // STEP 3: decode using the already-playing <video>
             if (zxingOK) {
                 const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = window.ZXingBrowser;
                 reader = new BrowserMultiFormatReader(new Map([
                     [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
                     [DecodeHintType.TRY_HARDER, true],
-                    [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]] // comic +2 / +5 add-ons
-                ]), 500);
+                    [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]] // comic +2/+5 add-ons
+                ]), 250);
 
-                const loop = async () => {
-                    if (!reader) return;
-                    try {
-                        const result = await reader.decodeOnceFromVideoDevice(undefined, videoEl);
-                        if (result?.text) { setSearchFromBarcode(result.text); try { navigator.vibrate && navigator.vibrate(30); } catch { } await stopScanner(); return; }
-                    } catch (e) { /* keep trying */ }
-                    requestAnimationFrame(loop);
-                };
-                loop();
+                // Continuous decode from video element (lets us stop cleanly via reader.reset())
+                reader.decodeFromVideoElementContinuously(videoEl, (result, err) => {
+                    if (result && result.text) {
+                        setSearchFromBarcode(result.text);
+                        try { navigator.vibrate && navigator.vibrate(30); } catch { }
+                        stopScanner();
+                    }
+                    // ignore NotFoundException frames; keep scanning
+                });
+
             } else {
+                // Fallback: native detector (Chrome/Android)
                 const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
                 const loop = async () => {
                     if (!stream) return;
                     try {
                         const codes = await detector.detect(videoEl);
-                        if (codes && codes[0]?.rawValue) { setSearchFromBarcode(codes[0].rawValue); try { navigator.vibrate && navigator.vibrate(30); } catch { } await stopScanner(); return; }
+                        if (codes && codes[0]?.rawValue) {
+                            setSearchFromBarcode(codes[0].rawValue);
+                            try { navigator.vibrate && navigator.vibrate(30); } catch { }
+                            await stopScanner(); return;
+                        }
                     } catch (e) { }
                     requestAnimationFrame(loop);
                 };
