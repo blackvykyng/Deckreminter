@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inventory Stager — Calm Cards + Reliable Scan</title>
+
+    <style>
+        :root {
+            --bg: #0b1020;
+            --panel: #0f172a;
+            --text: #e5e7eb;
+            --muted: #94a3b8;
+            --card: #0b1224;
+            --border: #1f2937;
+            --ok: #16a34a;
+            --warn: #ef4444;
+            --shadow: 0 12px 30px rgba(0, 0, 0, .28);
+            --thumb: 96px;
+        }
+
+        .bigthumb:root {
+            --thumb: 160px;
+        }
+
+        .light:root {
+            --bg: #f8fafc;
+            --panel: #ffffff;
+            --text: #0f172a;
+            --muted: #64748b;
+            --card: #ffffff;
+            --border: #e2e8f0;
+            --shadow: 0 10px 20px rgba(2, 6, 23, .06)
+        }
+
+        html,
+        body {
+            height: 100%
+        }
+
+        body {
+            margin: 0;
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text)
+        }
+
+        .header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: color-mix(in oklab, var(--bg) 88%, transparent);
+            backdrop-filter: blur(6px);
+            border-bottom: 1px solid var(--border)
+        }
+
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 14px 16px
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center
+        }
+
+        .title {
+            font-weight: 800
+        }
+
+        .pill {
+            font-size: 12px;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            border: 1px solid var(--border);
+            color: var(--muted)
+        }
+
+        .input {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 12px;
+            padding: 10px 12px;
+            outline: none
+        }
+
+        .btn {
+            border: 1px solid var(--border);
+            background: var(--panel);
+            color: var(--text);
+            padding: 10px 14px;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 700
+        }
+
+        .btn:active {
+            transform: translateY(1px)
+        }
+
+        .btn.save {
+            background: color-mix(in oklab, var(--panel) 85%, #065f46 15%)
+        }
+
+        .status {
+            padding: 8px 12px;
+            border: 1px dashed var(--border);
+            border-radius: 12px;
+            color: var(--muted)
+        }
+
+        .toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px
+        }
+
+        .scanWrap {
+            display: none;
+            margin-top: 10px
+        }
+
+        #preview {
+            width: 100%;
+            max-width: 520px;
+            border: 1px solid var(--border);
+            border-radius: 12px
+        }
+
+        .toast {
+            position: fixed;
+            right: 16px;
+            bottom: 96px;
+            background: var(--panel);
+            border: 2px solid var(--border);
+            padding: 12px 14px;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            display: none;
+            z-index: 50
+        }
+
+        .toast.ok {
+            border-color: #065f46
+        }
+
+        .toast.err {
+            border-color: #7f1d1d
+        }
+
+        .columns {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 14px;
+            margin-top: 12px
+        }
+
+        @media (min-width:860px) {
+            .columns {
+                grid-template-columns: 360px 1fr
+            }
+        }
+
+        .results {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 10px;
+            box-shadow: var(--shadow)
+        }
+
+        .results h3 {
+            margin: 4px 6px 8px 6px;
+            font-size: 14px;
+            color: var(--muted)
+        }
+
+        .res {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: space-between;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 8px 10px;
+            margin: 6px
+        }
+
+        .res .meta {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px
+        }
+
+        @media (min-width:680px) {
+            .cards {
+                grid-template-columns: 1fr 1fr
+            }
+        }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 12px;
+            box-shadow: var(--shadow)
+        }
+
+        .top {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 12px;
+            align-items: start
+        }
+
+        .thumb {
+            width: var(--thumb);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            background: linear-gradient(180deg, #0e162d, #0a1020)
+        }
+
+        .thumb .ph {
+            width: 100%;
+            aspect-ratio: 2/3;
+            display: grid;
+            place-items: center;
+            color: var(--muted);
+            font-size: 12px
+        }
+
+        .thumb img {
+            width: 100%;
+            height: auto;
+            display: block
+        }
+
+        .meta {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        .qty {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            padding: 8px 10px;
+            border-radius: 12px;
+            font-weight: 800;
+            min-width: 64px;
+            justify-content: center
+        }
+
+        .actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+            margin-top: 8px
+        }
+
+        .mini {
+            padding: 8px 10px;
+            border-radius: 10px;
+            font-weight: 700;
+            border: 1px solid var(--border);
+            background: var(--panel);
+            min-width: 44px;
+            text-align: center
+        }
+
+        .mini.minus {
+            background: color-mix(in oklab, var(--panel) 85%, #7f1d1d 15%)
+        }
+
+        .mini.plus {
+            background: color-mix(in oklab, var(--panel) 85%, #065f46 15%)
+        }
+
+        .mini.release {
+            background: color-mix(in oklab, var(--panel) 85%, #1f2937 15%)
+        }
+
+        .mini.photo {
+            background: color-mix(in oklab, var(--panel) 85%, #1e3a8a 15%)
+        }
+
+        .n {
+            width: 80px;
+            text-align: center
+        }
+
+        details {
+            margin-top: 8px
+        }
+
+        details>summary {
+            cursor: pointer;
+            user-select: none;
+            color: var(--muted)
+        }
+
+        .kv {
+            display: grid;
+            grid-template-columns: 120px 1fr;
+            gap: 6px;
+            margin-top: 8px;
+            font-size: 13px
+        }
+
+        .kv div:nth-child(odd) {
+            color: var(--muted)
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <div class="wrap">
+            <div class="row" style="justify-content:space-between; align-items:center">
+                <div class="title">Inventory Stager <span class="pill">offline</span></div>
+                <div class="row">
+                    <span id="scannerSource" class="pill">Scanner: (not loaded)</span>
+                    <span id="status" class="status">No file loaded</span>
+                </div>
+            </div>
+
+            <div class="row" style="margin-top:10px">
+                <input id="file" type="file" accept=".csv" class="input" />
+                <input id="search" type="text" class="input" placeholder="Search (Barcode, Series, …)"
+                    style="min-width:220px" />
+                <button id="scanBtn" class="btn">📷 Scan</button>
+                <button id="testCam" class="btn" title="Quick permission/connection check">Test camera</button>
+                <div class="scanWrap" id="scanArea"><video id="preview" playsinline></video></div>
+            </div>
+
+            <div class="row" style="margin-top:8px">
+                <span class="toggle"><input id="stageOnScan" type="checkbox" checked /> Stage first match on scan</span>
+                <span class="toggle"><input id="editMode" type="checkbox" /> Edit mode</span>
+                <span class="toggle"><input id="lightMode" type="checkbox" /> Light mode</span>
+                <span class="toggle"><input id="bigPics" type="checkbox" /> Larger pictures</span>
+                <input id="imgFiles" type="file" accept="image/*" multiple class="input"
+                    title="Add images by barcode filename" />
+                <button id="clearStaged" class="btn">Clear staged</button>
+                <span id="counts" class="status">Staged: 0 • Results: 0</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="wrap">
+        <div class="columns">
+            <div class="results">
+                <h3 id="resultsTitle">Results</h3>
+                <div id="resultsList"></div>
+            </div>
+
+            <div>
+                <div class="cards" id="cards"></div>
+                <div class="row" style="justify-content:flex-end; gap:10px; margin-top:10px">
+                    <span>Adjust by</span>
+                    <input id="by" type="number" min="1" value="1" class="input n" />
+                    <button id="undo" class="btn">Undo</button>
+                    <button id="save" class="btn save">Save CSV</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script>
+        /* ========= Robust ZXing loader + feature detection ========= */
+        let ZX_SRC = '(none)';
+        async function loadZXingIfNeeded() {
+            if (window.ZXingBrowser) return 'inline';
+            const UMDs = [
+                ["jsDelivr UMD", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
+                ["unpkg UMD", "https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
+                ["unpkg auto", "https://unpkg.com/@zxing/browser@0.1.5"],
+                ["local UMD", "./zxing-browser.min.js"] // optional local file next to this HTML
+            ];
+            for (const [label, src] of UMDs) {
+                try {
+                    await new Promise((ok, err) => {
+                        const s = document.createElement("script"); s.src = src; s.async = true;
+                        s.onload = ok; s.onerror = err; document.head.appendChild(s);
+                    });
+                    if (window.ZXingBrowser) { ZX_SRC = label; return label; }
+                } catch (e) { }
+            }
+            const ESMS = [
+                ["jsDelivr ESM", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm"],
+                ["esm.run ESM", "https://esm.run/@zxing/browser@0.1.5"]
+            ];
+            for (const [label, url] of ESMS) {
+                try {
+                    const mod = await import(url);
+                    if (mod?.BrowserMultiFormatReader) { window.ZXingBrowser = mod; ZX_SRC = label; return label; }
+                } catch (e) { }
+            }
+            return null;
+        }
+        const hasBarcodeDetector = "BarcodeDetector" in window;
+        function setScannerSourceBadge() {
+            const el = document.getElementById('scannerSource');
+            if (!el) return;
+            el.textContent = 'Scanner: ' + (ZX_SRC || (hasBarcodeDetector ? 'BarcodeDetector' : '(not loaded)'));
+        }
+
+        /* ========= CSV helpers ========= */
+        function parseCSV(text) {
+            const out = [], headers = []; let i = 0, f = '', rec = [], q = false, c = '';
+            text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+            function endF() { rec.push(f); f = '' } function endR() { if (rec.length || f.length) { out.push(rec.slice()); rec.length = 0 } }
+            while (i < text.length) {
+                c = text[i++]; if (q) { if (c === '"') { if (text[i] === '"') { f += '"'; i++ } else q = false } else f += c }
+                else { if (c === '"') q = true; else if (c === ',') endF(); else if (c === '\n') { endF(); endR() } else f += c }
+            }
+            endF(); endR(); if (!out.length) return { headers: [], rows: [] };
+            const head = out.shift().map(h => h.trim()); head.forEach(h => headers.push(h));
+            const rows = out.filter(r => r.some(c => (c ?? '').trim().length)).map(cols => { const o = {}; for (let j = 0; j < headers.length; j++) o[headers[j]] = cols[j] ?? ''; return o; });
+            return { headers, rows };
+        }
+        function csvEscape(v) { const s = String(v ?? ''); const need = /[",\n]/.test(s); const esc = s.replace(/"/g, '""'); return need ? `"${esc}"` : esc; }
+        function toCSV(headers, rows) { const lines = [headers.map(csvEscape).join(',')]; rows.forEach(o => lines.push(headers.map(h => csvEscape(o[h])).join(','))); return lines.join('\n'); }
+
+        /* ========= State ========= */
+        let headers = [], rows = [], history = [];
+        let filtered = []; const stagedOrder = []; const stagedSet = new Set(); const indexByKey = new Map();
+        let imageHeader = null; const imgMap = new Map(); const objURLs = new Set();
+
+        /* ========= Elements ========= */
+        const E = id => document.getElementById(id);
+        const statusEl = E('status'), toastEl = E('toast');
+        const fileEl = E('file'), searchEl = E('search');
+        const stageOnScanEl = E('stageOnScan'), editModeEl = E('editMode'), lightModeEl = E('lightMode'), bigPicsEl = E('bigPics');
+        const countsEl = E('counts'), byEl = E('by');
+        const resultsList = E('resultsList'), resultsTitle = E('resultsTitle');
+        const cardsEl = E('cards');
+        const scanBtn = E('scanBtn'), scanArea = E('scanArea'), videoEl = E('preview');
+        const imgFilesEl = E('imgFiles'), testCamBtn = E('testCam');
+
+        function setStatus(msg) { statusEl.textContent = msg; }
+        function toast(msg, kind = 'ok') {
+            toastEl.className = 'toast ' + (kind === 'err' ? 'err' : 'ok'); toastEl.textContent = msg; toastEl.style.display = 'block';
+            clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.style.display = 'none', 1800);
+        }
+
+        /* ========= Header + row helpers ========= */
+        function findHeader(name) { const low = name.toLowerCase(); return headers.find(h => h.toLowerCase() === low); }
+        function needHeaders() { if (!findHeader('Quantity')) throw new Error('Missing required column: Quantity'); if (!findHeader('Barcode')) throw new Error('Missing required column: Barcode'); }
+        function detectImageHeader() { imageHeader = headers.find(h => /image|cover\s*image|cover\s*url|thumbnail/i.test(h)) || null; }
+        function get(o, n) { const k = findHeader(n); return k ? o[k] : ''; }
+        function setVal(o, n, v) { const k = findHeader(n); if (k) o[k] = v; }
+        function qtyOf(o) { const n = Number(String(get(o, 'Quantity')).trim()); return Number.isFinite(n) ? Math.max(0, n) : 0; }
+        function digits(s) { return String(s || '').replace(/\D/g, ''); }
+        function keyOf(o, idx) { const d = digits(get(o, 'Barcode')); return d ? `${d}#${idx}` : `row#${idx}`; }
+        function updateIndex() { indexByKey.clear(); rows.forEach((o, i) => indexByKey.set(keyOf(o, i), i)); }
+        function updateCounts() { countsEl.textContent = `Staged: ${stagedOrder.length} • Results: ${filtered.length}`; }
+
+        /* ========= Images ========= */
+        function urlForKey(key, o) {
+            if (imgMap.has(key)) return imgMap.get(key);
+            if (imageHeader) {
+                const v = o[imageHeader];
+                if (v && /^https?:\/\//i.test(v)) return v;
+                if (v && v.startsWith('data:image/')) return v;
+            }
+            return null;
+        }
+        imgFilesEl.addEventListener('change', async (e) => {
+            const files = [...(e.target.files || [])]; if (!files.length) return;
+            let assigned = 0;
+            const by12 = new Map(), by17 = new Map();
+            rows.forEach((o, i) => {
+                const b = digits(get(o, 'Barcode')); if (!b) return;
+                const k = keyOf(o, i);
+                if (b.length >= 12) {
+                    const d12 = b.slice(0, 12); (by12.get(d12) || by12.set(d12, []).get(d12)).push(k);
+                    if (b.length >= 17) { const d17 = b.slice(0, 17); (by17.get(d17) || by17.set(d17, []).get(d17)).push(k); }
+                }
+            });
+            for (const f of files) {
+                const nameDigits = digits(f.name);
+                let targets = null;
+                if (nameDigits.length >= 17 && by17.get(nameDigits.slice(0, 17))) targets = by17.get(nameDigits.slice(0, 17));
+                else if (nameDigits.length >= 12 && by12.get(nameDigits.slice(0, 12))) targets = by12.get(nameDigits.slice(0, 12));
+                if (targets && targets.length) {
+                    const url = URL.createObjectURL(f); objURLs.add(url);
+                    targets.forEach(k => imgMap.set(k, url)); assigned += targets.length;
+                }
+            }
+            toast(`Added images for ${assigned} item${assigned === 1 ? '' : 's'}`, 'ok'); renderCards();
+        });
+
+        /* Per-card Add photo (camera or gallery) */
+        let currentPhotoKey = null;
+        const hiddenPhotoInput = document.createElement('input');
+        hiddenPhotoInput.type = 'file'; hiddenPhotoInput.accept = 'image/*'; hiddenPhotoInput.capture = 'environment'; hiddenPhotoInput.style.display = 'none';
+        hiddenPhotoInput.addEventListener('change', () => {
+            const f = hiddenPhotoInput.files[0]; if (!f || !currentPhotoKey) return;
+            const url = URL.createObjectURL(f); objURLs.add(url); imgMap.set(currentPhotoKey, url); currentPhotoKey = null; renderCards();
+        });
+        document.body.appendChild(hiddenPhotoInput);
+
+        /* ========= Staging ========= */
+        function stageKey(key) { if (!indexByKey.has(key) || stagedSet.has(key)) return; stagedSet.add(key); stagedOrder.push(key); renderCards(); updateCounts(); }
+        function releaseKey(key) { if (!stagedSet.has(key)) return; stagedSet.delete(key); const i = stagedOrder.indexOf(key); if (i >= 0) stagedOrder.splice(i, 1); renderCards(); updateCounts(); }
+        E('clearStaged').addEventListener('click', () => { stagedSet.clear(); stagedOrder.length = 0; renderCards(); updateCounts(); });
+
+        /* ========= Results (search) ========= */
+        function applyFilter() {
+            const qRaw = searchEl.value.trim(); const q = qRaw.toLowerCase(); const qDigits = digits(qRaw);
+            const out = [];
+            for (let i = 0; i < rows.length; i++) {
+                const o = rows[i]; if (stagedSet.has(keyOf(o, i))) continue;
+                let match = false;
+                if (qDigits.length >= 6) {
+                    const b = digits(get(o, 'Barcode'));
+                    if (b.includes(qDigits)) match = true;
+                    if (!match && qDigits.length === 17 && b.includes(qDigits.slice(0, 12))) match = true;
+                    if (!match && qDigits.length === 12 && b.startsWith(qDigits)) match = true;
+                }
+                if (!match) { match = headers.some(h => String(o[h] ?? '').toLowerCase().includes(q)); }
+                if (match) out.push({ o, i });
+                if (out.length >= 50) break;
+            }
+            filtered = out; renderResults(); updateCounts();
+        }
+        function renderResults() {
+            resultsList.innerHTML = ''; resultsTitle.textContent = `Results (${filtered.length})`;
+            if (!filtered.length) { resultsList.innerHTML = '<div class="meta" style="padding:10px">No matches yet. Type or scan to find items.</div>'; return; }
+            filtered.forEach(({ o, i }) => {
+                const title = `${get(o, 'Series') || '(No Series)'}${get(o, 'Issue Nr') ? ' — #' + get(o, 'Issue Nr') : ''}${get(o, 'Variant') ? ' • ' + get(o, 'Variant') : ''}`;
+                const barcode = get(o, 'Barcode') || ''; const qty = qtyOf(o);
+                const row = document.createElement('div'); row.className = 'res';
+                const left = document.createElement('div');
+                left.innerHTML = `<div style="font-weight:700">${title}</div><div class="meta">${barcode ? 'Barcode: ' + barcode : ''}  ${qty || qty === 0 ? '• Qty: ' + qty : ''}</div>`;
+                const right = document.createElement('div');
+                const btn = document.createElement('button'); btn.className = 'btn'; btn.textContent = 'Stage';
+                btn.addEventListener('click', () => { stageKey(keyOf(o, i)); toast('Staged', 'ok'); });
+                right.appendChild(btn);
+                row.appendChild(left); row.appendChild(right); resultsList.appendChild(row);
+            });
+        }
+
+        /* ========= Cards (staged only) ========= */
+        function renderCards() {
+            cardsEl.innerHTML = ''; document.documentElement.classList.toggle('bigthumb', E('bigPics').checked);
+            if (!stagedOrder.length) { const empty = document.createElement('div'); empty.className = 'meta'; empty.style.padding = '12px'; empty.textContent = 'Nothing staged yet. Search or scan to stage items here.'; cardsEl.appendChild(empty); return; }
+            const showEdits = E('editMode').checked;
+
+            stagedOrder.forEach(key => {
+                const idx = indexByKey.get(key); if (idx == null) return;
+                const o = rows[idx];
+                const title = `${get(o, 'Series') || '(No Series)'}${get(o, 'Issue Nr') ? ' — #' + get(o, 'Issue Nr') : ''}${get(o, 'Variant') ? ' • ' + get(o, 'Variant') : ''}`;
+                const meta = `${get(o, 'Publisher') || ''}${get(o, 'Release Year') ? ' • ' + get(o, 'Release Year') : ''}`;
+                const barcode = get(o, 'Barcode') || ''; const qty = qtyOf(o);
+
+                const card = document.createElement('div'); card.className = 'card';
+                const top = document.createElement('div'); top.className = 'top';
+
+                const thumb = document.createElement('div'); thumb.className = 'thumb';
+                const imgSrc = urlForKey(key, o);
+                if (imgSrc) { const im = document.createElement('img'); im.loading = 'lazy'; im.alt = 'Cover'; im.src = imgSrc; thumb.appendChild(im); }
+                else { const ph = document.createElement('div'); ph.className = 'ph'; ph.textContent = 'No image'; thumb.appendChild(ph); }
+
+                const left = document.createElement('div');
+                left.innerHTML = `<div style="font-weight:700">${title}</div>
+                          <div class="meta">${barcode ? 'Barcode: ' + barcode : ''}${meta ? (barcode ? ' • ' : '') + meta : ''}</div>`;
+
+                const right = document.createElement('div'); right.style.textAlign = 'right';
+                const qtySpan = document.createElement('span'); qtySpan.className = 'qty'; qtySpan.textContent = qty; right.appendChild(qtySpan);
+
+                top.appendChild(thumb); top.appendChild(left); top.appendChild(right); card.appendChild(top);
+
+                const act = document.createElement('div'); act.className = 'actions';
+                const releaseBtn = document.createElement('button'); releaseBtn.className = 'mini release'; releaseBtn.textContent = 'Release';
+                releaseBtn.addEventListener('click', () => { releaseKey(key); toast('Released', 'ok'); });
+                act.appendChild(releaseBtn);
+
+                const photoBtn = document.createElement('button'); photoBtn.className = 'mini photo'; photoBtn.textContent = 'Add photo';
+                photoBtn.addEventListener('click', () => { currentPhotoKey = key; hiddenPhotoInput.value = ''; hiddenPhotoInput.click(); });
+                act.appendChild(photoBtn);
+
+                const minus = document.createElement('button'); minus.className = 'mini minus'; minus.textContent = '−';
+                const plus = document.createElement('button'); plus.className = 'mini plus'; plus.textContent = '+';
+                const nInp = document.createElement('input'); nInp.className = 'input n'; nInp.type = 'number'; nInp.min = '1'; nInp.value = Number(byEl.value) || 1;
+                const setBtn = document.createElement('button'); setBtn.className = 'mini'; setBtn.textContent = 'Set…';
+
+                function applyDelta(delta) {
+                    const before = qtyOf(o);
+                    const d = delta < 0 ? -Math.min(Math.abs(delta), before) : delta;
+                    const after = before + d;
+                    setVal(o, 'Quantity', String(after));
+                    history.push({ index: idx, delta: d });
+                    qtySpan.textContent = after;
+                    setStatus(`Updated ${barcode} → ${after}`); toast(`${d < 0 ? '−' : '+'}${Math.abs(d)} ${get(o, 'Series') || get(o, 'Publisher') || ''}`, 'ok');
+                }
+                minus.addEventListener('click', () => applyDelta(-Math.max(1, Number(nInp.value) || 1)));
+                plus.addEventListener('click', () => applyDelta(Math.max(1, Number(nInp.value) || 1)));
+                setBtn.addEventListener('click', () => {
+                    const v = prompt(`Set Quantity for:\n${title}\n${barcode}`, qtyOf(o));
+                    if (v === null) return;
+                    const newQty = Math.max(0, Number(v) || 0), delta = newQty - qtyOf(o);
+                    setVal(o, 'Quantity', String(newQty)); history.push({ index: idx, delta });
+                    qtySpan.textContent = newQty; setStatus(`Set ${barcode} → ${newQty}`); toast(`Set to ${newQty}`, 'ok');
+                });
+
+                [minus, plus, nInp, setBtn].forEach(el => { el.style.display = showEdits ? '' : 'none'; act.appendChild(el); });
+                card.appendChild(act);
+
+                const det = document.createElement('details');
+                const sum = document.createElement('summary'); sum.textContent = 'Details'; det.appendChild(sum);
+                const kv = document.createElement('div'); kv.className = 'kv';
+                const hide = new Set(['Series', 'Issue Nr', 'Variant', 'Publisher', 'Release Year', 'Barcode', 'Quantity', imageHeader]);
+                headers.forEach(h => {
+                    if (hide.has(h)) return;
+                    const k = document.createElement('div'); k.textContent = h;
+                    const v = document.createElement('div'); v.textContent = String(o[h] ?? '');
+                    kv.appendChild(k); kv.appendChild(v);
+                });
+                det.appendChild(kv); card.appendChild(det);
+
+                cardsEl.appendChild(card);
+            });
+        }
+
+        /* ========= File + toggles ========= */
+        fileEl.addEventListener('change', async (e) => {
+            const f = e.target.files[0]; if (!f) return;
+            const text = await f.text();
+            try {
+                const parsed = parseCSV(text); headers = parsed.headers; rows = parsed.rows; history = [];
+                needHeaders(); detectImageHeader();
+                stagedSet.clear(); stagedOrder.length = 0; updateIndex();
+                searchEl.value = ''; filtered = []; renderResults(); renderCards(); updateCounts();
+                setStatus(`${f.name}: ${rows.length} rows`); toast('File loaded', 'ok');
+            } catch (err) { setStatus('Failed to load'); toast(String(err), 'err'); }
+        });
+        searchEl.addEventListener('input', applyFilter);
+        byEl.addEventListener('change', () => renderCards());
+        editModeEl.addEventListener('change', () => renderCards());
+        lightModeEl.addEventListener('change', () => { document.documentElement.classList.toggle('light', lightModeEl.checked); });
+        bigPicsEl.addEventListener('change', () => renderCards());
+
+        /* ========= Undo & Save ========= */
+        E('undo').addEventListener('click', () => {
+            const last = history.pop(); if (!last) { toast('Nothing to undo'); return; }
+            const o = rows[last.index]; if (!o) return;
+            const now = qtyOf(o); const after = Math.max(0, now - last.delta);
+            setVal(o, 'Quantity', String(after));
+            toast('Undo complete', 'ok'); setStatus('Undo complete'); renderCards();
+        });
+        E('save').addEventListener('click', () => {
+            if (!rows.length) { toast('No data loaded', 'err'); return; }
+            const csv = toCSV(headers, rows);
+            const blob = new Blob([csv], { type: 'text/csv' }); const a = document.createElement('a');
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            a.href = URL.createObjectURL(blob); a.download = `inventory-updated-${ts}.csv`; a.click(); URL.revokeObjectURL(a.href);
+            toast('Saved CSV', 'ok'); setStatus('Saved CSV to downloads');
+        });
+
+        /* ========= Scanner (ZXing with fallback to BarcodeDetector) ========= */
+        let reader = null, stream = null;
+        function normalizeComicBarcode(text) {
+            const m = String(text).replace(/[^\d+ ]/g, '').match(/(\d{12,13})(?:[ +\-]?(\d{2,5}))?/);
+            return m ? { main: m[1], addon: m[2] || '' } : { main: text.trim(), addon: '' };
+        }
+        function setSearchFromBarcode(payload) {
+            const { main, addon } = normalizeComicBarcode(payload);
+            const combined = (main || '') + (addon || ''); searchEl.value = combined || payload.trim(); applyFilter();
+            if (stageOnScanEl.checked && filtered.length) {
+                const best = filtered.find(({ o, i }) => {
+                    const b = digits(get(o, 'Barcode')); return combined && (b === combined || b.startsWith(combined) || combined.startsWith(b));
+                }) || filtered[0];
+                stageKey(keyOf(best.o, best.i)); toast('Staged from scan', 'ok');
+            } else {
+                toast(`Scanned ${addon ? main + ' + ' + addon : main}`, 'ok');
+            }
+        }
+        async function stopScanner() {
+            try { reader && reader.stopStreams && reader.stopStreams(); } catch { }
+            try { stream && stream.getTracks().forEach(t => t.stop()); } catch { }
+            reader = null; stream = null; scanArea.style.display = 'none';
+        }
+
+        async function startScanner() {
+            if (location.protocol === "file:") toast("Open via http(s) — camera is usually blocked on file://", "err");
+
+            const zxingOK = await loadZXingIfNeeded();
+            setScannerSourceBadge();
+
+            if (!zxingOK && !hasBarcodeDetector) {
+                toast("Scanner lib not loaded and no BarcodeDetector. Whitelist cdn.jsdelivr.net / unpkg.com, or place zxing-browser.min.js next to this file.", "err");
+                return;
+            }
+
+            scanArea.style.display = 'block';
+
+            try {
+                const ZX = window.ZXingBrowser;
+                const devices = zxingOK ? await ZX.BrowserMultiFormatReader.listVideoInputDevices() : [];
+                const back = devices.find(d => /back|rear|environment/i.test(d.label)) || devices[0];
+                const constraints = back?.deviceId
+                    ? { video: { deviceId: { exact: back.deviceId } }, audio: false }
+                    : { video: { facingMode: "environment" }, audio: false };
+
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (e) {
+                    if (e.name === 'OverconstrainedError' || e.name === 'NotFoundError') {
+                        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                    } else { throw e; }
+                }
+            } catch (e) {
+                let msg = 'Camera error: ' + (e.name || '') + ' ' + (e.message || '');
+                if (e.name === 'NotAllowedError') msg = 'Permission blocked. Enable Camera for this site in your browser settings.';
+                if (e.name === 'NotFoundError') msg = 'No camera found or accessible.';
+                if (e.name === 'NotReadableError') msg = 'Camera is busy (used by another app). Close other apps and retry.';
+                if (e.name === 'SecurityError') msg = 'Insecure origin. Use https:// or http://localhost.';
+                toast(msg, 'err'); scanArea.style.display = 'none'; return;
+            }
+
+            videoEl.srcObject = stream; await videoEl.play();
+
+            if (zxingOK) {
+                const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = window.ZXingBrowser;
+                reader = new BrowserMultiFormatReader(new Map([
+                    [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
+                    [DecodeHintType.TRY_HARDER, true]
+                ]), 500);
+
+                const loop = async () => {
+                    if (!reader) return;
+                    try {
+                        const result = await reader.decodeOnceFromVideoDevice(undefined, videoEl);
+                        if (result?.text) { setSearchFromBarcode(result.text); await stopScanner(); return; }
+                    } catch (e) { /* keep trying */ }
+                    requestAnimationFrame(loop);
+                };
+                loop();
+            } else {
+                const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
+                const loop = async () => {
+                    if (!stream) return;
+                    try {
+                        const codes = await detector.detect(videoEl);
+                        if (codes && codes[0]?.rawValue) { setSearchFromBarcode(codes[0].rawValue); await stopScanner(); return; }
+                    } catch (e) { /* keep trying */ }
+                    requestAnimationFrame(loop);
+                };
+                loop();
+            }
+        }
+
+        scanBtn.addEventListener('click', async () => {
+            try { if (reader || stream) await stopScanner(); else await startScanner(); }
+            catch (err) { toast('Camera unavailable. Try https:// or localhost.', 'err'); console.error(err); }
+        });
+
+        /* ========= One-click camera test (diagnostics) ========= */
+        testCamBtn.addEventListener('click', async () => {
+            try {
+                const st = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                st.getTracks().forEach(t => t.stop());
+                toast('Camera test: OK', 'ok');
+            } catch (e) {
+                let msg = 'Camera test failed: ' + (e.name || '') + ' ' + (e.message || '');
+                if (e.name === 'NotAllowedError') msg = 'Camera permission blocked. Enable it in your browser/site settings.';
+                if (e.name === 'NotFoundError') msg = 'No camera found or not accessible.';
+                if (e.name === 'SecurityError') msg = 'Insecure origin. Use https:// or http://localhost.';
+                if (e.name === 'NotReadableError') msg = 'Camera is busy (another app is using it).';
+                toast(msg, 'err');
+            }
+        });
+
+        /* ========= Cleanup ========= */
+        window.addEventListener('beforeunload', () => { objURLs.forEach(u => URL.revokeObjectURL(u)); });
+        setScannerSourceBadge(); // initial badge on load
+    </script>
+</body>
+
+</html>
