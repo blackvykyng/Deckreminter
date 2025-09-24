@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Inventory Stager — Calm Cards + Reliable Scan</title>
+    <title>Inventory Stager — Calm Cards + Scan HUD</title>
     <style>
         :root {
             --bg: #0b1020;
@@ -115,39 +115,6 @@
             display: inline-flex;
             align-items: center;
             gap: 6px
-        }
-
-        .scanWrap {
-            display: none;
-            margin-top: 10px
-        }
-
-        #preview {
-            width: 100%;
-            max-width: 520px;
-            border: 1px solid var(--border);
-            border-radius: 12px
-        }
-
-        .toast {
-            position: fixed;
-            right: 16px;
-            bottom: 96px;
-            background: var(--panel);
-            border: 2px solid var(--border);
-            padding: 12px 14px;
-            border-radius: 12px;
-            box-shadow: var(--shadow);
-            display: none;
-            z-index: 50
-        }
-
-        .toast.ok {
-            border-color: #065f46
-        }
-
-        .toast.err {
-            border-color: #7f1d1d
         }
 
         .columns {
@@ -321,6 +288,77 @@
         .kv div:nth-child(odd) {
             color: var(--muted)
         }
+
+        /* === Scan HUD === */
+        .scanWrap {
+            display: none;
+            margin-top: 10px
+        }
+
+        .scanHud {
+            position: relative;
+            width: 100%;
+            max-width: 520px
+        }
+
+        #preview {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            display: block
+        }
+
+        .crosshair {
+            position: absolute;
+            inset: 10% 18%;
+            border: 2px dashed color-mix(in oklab, var(--muted) 70%, transparent);
+            border-radius: 16px;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, .25) inset;
+            pointer-events: none
+        }
+
+        .hudMsg {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+            bottom: 10px;
+            background: color-mix(in oklab, var(--panel) 90%, transparent);
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            padding: 8px 12px;
+            font-weight: 700;
+            display: flex;
+            gap: 8px;
+            align-items: center
+        }
+
+        .hudMsg.ok {
+            border-color: #059669;
+            background: color-mix(in oklab, var(--panel) 70%, #065f46 30%)
+        }
+
+        .hudMsg.err {
+            border-color: #dc2626;
+            background: color-mix(in oklab, var(--panel) 75%, #7f1d1d 25%)
+        }
+
+        .pulse {
+            animation: pulse 600ms ease-in-out 2
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: translateX(-50%) scale(1)
+            }
+
+            50% {
+                transform: translateX(-50%) scale(1.04)
+            }
+
+            100% {
+                transform: translateX(-50%) scale(1)
+            }
+        }
     </style>
 </head>
 
@@ -344,7 +382,15 @@
                 <button id="torchBtn" class="btn" style="display:none">Torch</button>
                 <input id="zoomSlider" type="range" min="1" max="1" step="0.1" value="1" class="input"
                     style="display:none;width:140px" title="Zoom">
-                <div class="scanWrap" id="scanArea"><video id="preview" playsinline></video></div>
+            </div>
+
+            <div class="scanWrap" id="scanArea">
+                <div class="scanHud">
+                    <video id="preview" playsinline></video>
+                    <div class="crosshair" id="crosshair"></div>
+                    <div class="hudMsg" id="hudMsg"><span id="hudStatus">Scanning…</span><span id="hudCode" class="pill"
+                            style="display:none"></span></div>
+                </div>
             </div>
 
             <div class="row" style="margin-top:8px">
@@ -381,12 +427,12 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
     <script>
-        /* ===== ZXing loader with many fallbacks (and badge) ===== */
+        /* ===== ZXing loader with fallbacks + badge ===== */
         let ZX_SRC = '(none)';
         async function loadZXingIfNeeded() {
             if (window.ZXingBrowser) return 'inline';
             const UMDs = [
-                ["local UMD", "./zxing-browser.min.js"], // local fallback first (if present)
+                ["local UMD", "./zxing-browser.min.js"],
                 ["jsDelivr UMD", "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg UMD", "https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"],
                 ["unpkg auto", "https://unpkg.com/@zxing/browser@0.1.5"]
@@ -412,6 +458,16 @@
             el.textContent = 'Scanner: ' + (ZX_SRC || (hasBarcodeDetector ? 'BarcodeDetector' : '(not loaded)'));
         }
 
+        /* ===== Utilities ===== */
+        const E = id => document.getElementById(id);
+        const statusEl = E('status'), toastEl = E('toast');
+        function setStatus(msg) { statusEl.textContent = msg; }
+        function toast(msg, kind = 'ok') {
+            toastEl.className = 'toast ' + (kind === 'err' ? 'err' : 'ok'); toastEl.textContent = msg;
+            toastEl.style.display = 'block'; clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.style.display = 'none', 1800);
+        }
+        function digits(s) { return String(s || '').replace(/\D/g, ''); }
+
         /* ===== CSV helpers ===== */
         function parseCSV(text) {
             const out = [], headers = []; let i = 0, f = '', rec = [], q = false, c = '';
@@ -435,33 +491,57 @@
         let imageHeader = null; const imgMap = new Map(); const objURLs = new Set();
 
         /* ===== Elements ===== */
-        const E = id => document.getElementById(id);
-        const statusEl = E('status'), toastEl = E('toast');
-        const fileEl = E('file'), searchEl = E('search');
+        const fileEl = E('file'), searchEl = E('search'), byEl = E('by');
         const stageOnScanEl = E('stageOnScan'), editModeEl = E('editMode'), lightModeEl = E('lightMode'), bigPicsEl = E('bigPics');
-        const countsEl = E('counts'), byEl = E('by');
-        const resultsList = E('resultsList'), resultsTitle = E('resultsTitle');
+        const resultsList = E('resultsList'), resultsTitle = E('resultsTitle'), countsEl = E('counts');
         const cardsEl = E('cards');
         const scanBtn = E('scanBtn'), scanArea = E('scanArea'), videoEl = E('preview');
-        const imgFilesEl = E('imgFiles'), testCamBtn = E('testCam'), torchBtn = E('torchBtn'), zoomSlider = E('zoomSlider');
+        const testCamBtn = E('testCam'), torchBtn = E('torchBtn'), zoomSlider = E('zoomSlider');
+        const hudMsg = E('hudMsg'), hudStatus = E('hudStatus'), hudCode = E('hudCode'), crosshair = E('crosshair');
+        const imgFilesEl = E('imgFiles');
 
-        function setStatus(msg) { statusEl.textContent = msg; }
-        function toast(msg, kind = 'ok') {
-            toastEl.className = 'toast ' + (kind === 'err' ? 'err' : 'ok'); toastEl.textContent = msg; toastEl.style.display = 'block';
-            clearTimeout(toastEl._t); toastEl._t = setTimeout(() => toastEl.style.display = 'none', 1800);
-        }
-
-        /* ===== Header/row helpers ===== */
         function findHeader(name) { const low = name.toLowerCase(); return headers.find(h => h.toLowerCase() === low); }
         function needHeaders() { if (!findHeader('Quantity')) throw new Error('Missing required column: Quantity'); if (!findHeader('Barcode')) throw new Error('Missing required column: Barcode'); }
         function detectImageHeader() { imageHeader = headers.find(h => /image|cover\s*image|cover\s*url|thumbnail/i.test(h)) || null; }
         function get(o, n) { const k = findHeader(n); return k ? o[k] : ''; }
         function setVal(o, n, v) { const k = findHeader(n); if (k) o[k] = v; }
         function qtyOf(o) { const n = Number(String(get(o, 'Quantity')).trim()); return Number.isFinite(n) ? Math.max(0, n) : 0; }
-        function digits(s) { return String(s || '').replace(/\D/g, ''); }
         function keyOf(o, idx) { const d = digits(get(o, 'Barcode')); return d ? `${d}#${idx}` : `row#${idx}`; }
         function updateIndex() { indexByKey.clear(); rows.forEach((o, i) => indexByKey.set(keyOf(o, i), i)); }
         function updateCounts() { countsEl.textContent = `Staged: ${stagedOrder.length} • Results: ${filtered.length}`; }
+
+        /* ===== Scan HUD feedback ===== */
+        let scanTicker = null, scanStart = 0, lastFoundAt = 0;
+        function hudReset() { hudMsg.className = 'hudMsg'; hudStatus.textContent = 'Scanning…'; hudCode.style.display = 'none'; crosshair.style.borderColor = 'color-mix(in oklab, var(--muted) 70%, transparent)'; }
+        function hudScanning() { hudMsg.className = 'hudMsg'; hudStatus.textContent = 'Scanning…'; hudCode.style.display = 'none'; crosshair.style.borderColor = 'color-mix(in oklab, var(--muted) 70%, transparent)'; }
+        function hudHint() { hudMsg.className = 'hudMsg err pulse'; hudStatus.textContent = 'No barcode yet — try torch/zoom or steady hand'; hudCode.style.display = 'none'; }
+        function hudSuccess(code, matches) {
+            hudMsg.className = 'hudMsg ok pulse';
+            hudStatus.textContent = matches != null ? `Found (${matches} match${matches === 1 ? '' : 'es'})` : 'Found';
+            hudCode.textContent = code; hudCode.style.display = '';
+            crosshair.style.borderColor = '#16a34a';
+        }
+        function startHudTimer() {
+            clearInterval(scanTicker); scanStart = Date.now(); lastFoundAt = 0; hudScanning();
+            scanTicker = setInterval(() => {
+                const s = ((Date.now() - scanStart) / 1000).toFixed(1);
+                if (!lastFoundAt) hudStatus.textContent = `Scanning… ${s}s`;
+                if (!lastFoundAt && Number(s) >= 4) hudHint();
+            }, 250);
+        }
+        function stopHudTimer() { clearInterval(scanTicker); scanTicker = null; }
+
+        /* Small beep for success (Android/iOS will allow after user interaction) */
+        let audioCtx = null;
+        function beep(freq = 900, ms = 120) {
+            try {
+                audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+                const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+                o.type = 'sine'; o.frequency.value = freq; o.connect(g); g.connect(audioCtx.destination);
+                const t = audioCtx.currentTime; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.2, t + 0.01);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000); o.start(t); o.stop(t + ms / 1000 + 0.02);
+            } catch (e) { }
+        }
 
         /* ===== Images ===== */
         function urlForKey(key, o) {
@@ -469,7 +549,6 @@
             if (imageHeader) { const v = o[imageHeader]; if (v && /^https?:\/\//i.test(v)) return v; if (v && v.startsWith('data:image/')) return v; }
             return null;
         }
-        // Bulk add by filenames (012345678905.jpg or 01234567890551234.png)
         imgFilesEl.addEventListener('change', async (e) => {
             const files = [...(e.target.files || [])]; if (!files.length) return;
             let assigned = 0; const by12 = new Map(), by17 = new Map();
@@ -494,7 +573,7 @@
         function releaseKey(key) { if (!stagedSet.has(key)) return; stagedSet.delete(key); const i = stagedOrder.indexOf(key); if (i >= 0) stagedOrder.splice(i, 1); renderCards(); updateCounts(); }
         E('clearStaged').addEventListener('click', () => { stagedSet.clear(); stagedOrder.length = 0; renderCards(); updateCounts(); });
 
-        /* ===== Results (search) ===== */
+        /* ===== Search/Results ===== */
         function applyFilter() {
             const qRaw = searchEl.value.trim(); const q = qRaw.toLowerCase(); const qDigits = digits(qRaw);
             const out = [];
@@ -531,10 +610,11 @@
 
         /* ===== Cards (staged only) ===== */
         function renderCards() {
-            cardsEl.innerHTML = ''; document.documentElement.classList.toggle('light', lightModeEl.checked);
-            document.documentElement.classList.toggle('bigthumb', bigPicsEl.checked);
+            cardsEl.innerHTML = '';
+            document.documentElement.classList.toggle('light', E('lightMode').checked);
+            document.documentElement.classList.toggle('bigthumb', E('bigPics').checked);
             if (!stagedOrder.length) { const empty = document.createElement('div'); empty.className = 'meta'; empty.style.padding = '12px'; empty.textContent = 'Nothing staged yet. Search or scan to stage items here.'; cardsEl.appendChild(empty); return; }
-            const showEdits = editModeEl.checked;
+            const showEdits = E('editMode').checked;
 
             stagedOrder.forEach(key => {
                 const idx = indexByKey.get(key); if (idx == null) return;
@@ -627,9 +707,9 @@
         });
         searchEl.addEventListener('input', applyFilter);
         byEl.addEventListener('change', () => renderCards());
-        editModeEl.addEventListener('change', () => renderCards());
-        lightModeEl.addEventListener('change', () => renderCards());
-        bigPicsEl.addEventListener('change', () => renderCards());
+        E('editMode').addEventListener('change', () => renderCards());
+        E('lightMode').addEventListener('change', () => renderCards());
+        E('bigPics').addEventListener('change', () => renderCards());
 
         /* ===== Undo & Save ===== */
         E('undo').addEventListener('click', () => {
@@ -648,7 +728,7 @@
             toast('Saved CSV', 'ok'); setStatus('Saved CSV to downloads');
         });
 
-        /* ===== Scanner (ZXing from <video> + fallback + Torch/Zoom) ===== */
+        /* ===== Scanner (ZXing from <video> + fallback + Torch/Zoom + HUD) ===== */
         let reader = null, stream = null, camTrack = null;
 
         function normalizeComicBarcode(text) {
@@ -657,15 +737,18 @@
         }
         function setSearchFromBarcode(payload) {
             const { main, addon } = normalizeComicBarcode(payload);
-            const combined = (main || '') + (addon || ''); searchEl.value = combined || payload.trim(); applyFilter();
-            if (stageOnScanEl.checked && filtered.length) {
+            const combined = (main || '') + (addon || '');
+            searchEl.value = combined || payload.trim();
+            applyFilter();
+            const matches = filtered.length;
+            hudSuccess(combined || payload.trim(), matches);
+            if (E('stageOnScan').checked && matches) {
                 const best = filtered.find(({ o, i }) => {
                     const b = digits(get(o, 'Barcode'));
                     return combined && (b === combined || b.startsWith(combined) || combined.startsWith(b));
                 }) || filtered[0];
-                stageKey(keyOf(best.o, best.i)); toast('Staged from scan', 'ok');
-            } else {
-                toast(`Scanned ${addon ? main + ' + ' + addon : main}`, 'ok');
+                stageKey(keyOf(best.o, best.i));
+                toast('Staged from scan', 'ok');
             }
         }
 
@@ -673,8 +756,10 @@
             try { reader && reader.reset && reader.reset(); } catch { }
             try { reader && reader.stopStreams && reader.stopStreams(); } catch { }
             try { stream && stream.getTracks().forEach(t => t.stop()); } catch { }
-            reader = null; stream = null; camTrack = null; scanArea.style.display = 'none';
+            reader = null; stream = null; camTrack = null;
+            scanArea.style.display = 'none';
             torchBtn.style.display = 'none'; zoomSlider.style.display = 'none';
+            stopHudTimer(); hudReset();
         }
 
         async function setupCameraControls(s) {
@@ -683,29 +768,23 @@
             const caps = camTrack.getCapabilities ? camTrack.getCapabilities() : {};
             const setts = camTrack.getSettings ? camTrack.getSettings() : {};
 
-            // Torch
             if (caps.torch) {
                 torchBtn.style.display = '';
                 let on = false; torchBtn.textContent = 'Torch: Off';
                 torchBtn.onclick = async () => {
                     on = !on;
-                    try {
-                        await camTrack.applyConstraints({ advanced: [{ torch: on }] });
-                        torchBtn.textContent = on ? 'Torch: On' : 'Torch: Off';
-                    } catch { toast('Torch not available now', 'err'); }
+                    try { await camTrack.applyConstraints({ advanced: [{ torch: on }] }); torchBtn.textContent = on ? 'Torch: On' : 'Torch: Off'; }
+                    catch { toast('Torch not available now', 'err'); }
                 };
             } else torchBtn.style.display = 'none';
 
-            // Zoom
             if (typeof caps.zoom === 'number' || (caps.zoom && 'min' in caps.zoom)) {
-                const min = caps.zoom.min ?? 1, max = caps.zoom.max ?? Math.max(1, Number(setts.zoom) || 2);
-                const step = caps.zoom.step ?? 0.1;
+                const min = caps.zoom.min ?? 1, max = caps.zoom.max ?? Math.max(1, Number(setts.zoom) || 2), step = caps.zoom.step ?? 0.1;
                 zoomSlider.min = String(min); zoomSlider.max = String(max); zoomSlider.step = String(step);
                 zoomSlider.value = String(setts.zoom ?? min); zoomSlider.style.display = '';
                 zoomSlider.oninput = async () => {
-                    try {
-                        await camTrack.applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] });
-                    } catch { try { await camTrack.applyConstraints({ zoom: Number(zoomSlider.value) }); } catch { } }
+                    try { await camTrack.applyConstraints({ advanced: [{ zoom: Number(zoomSlider.value) }] }); }
+                    catch { try { await camTrack.applyConstraints({ zoom: Number(zoomSlider.value) }); } catch { } }
                 };
             } else zoomSlider.style.display = 'none';
         }
@@ -722,8 +801,9 @@
             }
 
             scanArea.style.display = 'block';
+            hudReset(); startHudTimer();
 
-            // STEP 1: preflight permission (ask for environment cam; request decent resolution)
+            // Preflight permission + decent frame size
             let preflight;
             try {
                 preflight = await navigator.mediaDevices.getUserMedia({
@@ -736,13 +816,13 @@
                 if (e.name === 'NotFoundError') msg = 'No camera found or accessible.';
                 if (e.name === 'NotReadableError') msg = 'Camera is busy (another app is using it).';
                 if (e.name === 'SecurityError') msg = 'Insecure origin. Use https:// or http://localhost.';
-                toast(msg, 'err'); scanArea.style.display = 'none'; return;
+                toast(msg, 'err'); scanArea.style.display = 'none'; stopHudTimer(); return;
             }
 
             videoEl.srcObject = preflight; await videoEl.play();
             await setupCameraControls(preflight);
 
-            // STEP 2: swap to back camera via deviceId if ZXing is present
+            // Try to swap to explicit back camera if ZXing is present
             try {
                 if (zxingOK) {
                     const ZX = window.ZXingBrowser;
@@ -759,35 +839,39 @@
                 } else { stream = preflight; }
             } catch (e) { console.warn('Back-camera swap failed, using preflight stream:', e); stream = preflight; }
 
-            // STEP 3: decode using the already-playing <video>
+            // Decode from the already-playing <video>
             if (zxingOK) {
                 const { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } = window.ZXingBrowser;
                 reader = new BrowserMultiFormatReader(new Map([
                     [DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E]],
                     [DecodeHintType.TRY_HARDER, true],
-                    [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]] // comic +2/+5 add-ons
-                ]), 250);
+                    [DecodeHintType.ALLOWED_EAN_EXTENSIONS, [2, 5]] // comic +2/+5
+                ]), 200);
 
-                // Continuous decode from video element (lets us stop cleanly via reader.reset())
                 reader.decodeFromVideoElementContinuously(videoEl, (result, err) => {
                     if (result && result.text) {
-                        setSearchFromBarcode(result.text);
+                        lastFoundAt = Date.now();
+                        const code = result.text.replace(/\s+/g, '');
+                        hudSuccess(code, filtered.length);
                         try { navigator.vibrate && navigator.vibrate(30); } catch { }
-                        stopScanner();
+                        beep();
+                        setTimeout(() => stopScanner(), 100); // let the green flash show
                     }
-                    // ignore NotFoundException frames; keep scanning
+                    // ignore err (NotFoundException) — it fires when no code in frame
                 });
 
             } else {
-                // Fallback: native detector (Chrome/Android)
                 const detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e'] });
                 const loop = async () => {
                     if (!stream) return;
                     try {
                         const codes = await detector.detect(videoEl);
                         if (codes && codes[0]?.rawValue) {
-                            setSearchFromBarcode(codes[0].rawValue);
+                            lastFoundAt = Date.now();
+                            const code = codes[0].rawValue.replace(/\s+/g, '');
+                            hudSuccess(code, filtered.length);
                             try { navigator.vibrate && navigator.vibrate(30); } catch { }
+                            beep();
                             await stopScanner(); return;
                         }
                     } catch (e) { }
@@ -797,9 +881,12 @@
             }
         }
 
-        scanBtn.addEventListener('click', async () => { try { if (reader || stream) await stopScanner(); else await startScanner(); } catch (err) { toast('Camera unavailable. Try https:// or localhost.', 'err'); console.error(err); } });
+        scanBtn.addEventListener('click', async () => {
+            try { if (reader || stream) await stopScanner(); else await startScanner(); }
+            catch (err) { toast('Camera unavailable. Try https:// or localhost.', 'err'); console.error(err); }
+        });
 
-        /* ===== Test camera ===== */
+        /* Test camera */
         testCamBtn.addEventListener('click', async () => {
             try { const st = await navigator.mediaDevices.getUserMedia({ video: true, audio: false }); st.getTracks().forEach(t => t.stop()); toast('Camera test: OK', 'ok'); }
             catch (e) {
@@ -812,7 +899,7 @@
             }
         });
 
-        /* ===== Per-card Add photo ===== */
+        /* Add photo (per-card) */
         let currentPhotoKey = null;
         const hiddenPhotoInput = document.createElement('input');
         hiddenPhotoInput.type = 'file'; hiddenPhotoInput.accept = 'image/*'; hiddenPhotoInput.capture = 'environment'; hiddenPhotoInput.style.display = 'none';
@@ -822,10 +909,18 @@
         });
         document.body.appendChild(hiddenPhotoInput);
 
-        /* ===== Cleanup ===== */
+        /* Cleanup */
         window.addEventListener('beforeunload', () => { objURLs.forEach(u => URL.revokeObjectURL(u)); });
 
-        /* init */
+        /* ===== Results & rendering helpers ===== */
+        function updateCounts() { countsEl.textContent = `Staged: ${stagedOrder.length} • Results: ${filtered.length}`; }
+        function urlForKey(key, o) {
+            if (imgMap.has(key)) return imgMap.get(key);
+            if (imageHeader) { const v = o[imageHeader]; if (v && /^https?:\/\//i.test(v)) return v; if (v && v.startsWith('data:image/')) return v; }
+            return null;
+        }
+
+        /* Init badge */
         setScannerSourceBadge();
     </script>
 </body>
